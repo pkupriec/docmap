@@ -7,25 +7,18 @@ using System.Text.RegularExpressions;
 
 namespace doc_loader_http_elastic
 {
-    class scpfoundation
+    class Docloader
     {
-        private List<string> MasterPages = new List<string>()
-        {
-            { "http://www.scp-wiki.net/scp-series" },
-            { "http://www.scp-wiki.net/scp-series-2" },
-            { "http://www.scp-wiki.net/scp-series-3" },
-            { "http://www.scp-wiki.net/scp-series-4" },
-            { "http://www.scp-wiki.net/scp-series-5" }
-        };
+       
         private string pageRegexp = ".*scp-\\d.*";
-        public List<string> getDocumentUrls ()
+        public List<string> GetSubDocumentUrls(List<string> masterUrls,string urlPattern)
         {
             HtmlWeb hw = new HtmlWeb();
             List<string> DocumentURLs = new List<string> { };
-            foreach (string masterPage in MasterPages)
+            foreach (string masterUrl in masterUrls)
                 {
-                HtmlDocument doc = hw.Load(masterPage);
-                foreach (HtmlNode link in doc.DocumentNode.SelectNodes("//a[@href]"))
+                HtmlDocument doc = hw.Load(masterUrl);
+                foreach (HtmlNode link in doc.DocumentNode.SelectNodes(urlPattern))
                 {
                     string DocumentURl = link.GetAttributeValue("href", null);
                     if (Regex.IsMatch(DocumentURl, pageRegexp))
@@ -33,6 +26,11 @@ namespace doc_loader_http_elastic
                 };
             }
             return DocumentURLs;
+        }
+        public string GetDocumentByUrl(string url)
+        {
+            HtmlWeb hw = new HtmlWeb();
+            return hw.Load(url).DocumentNode.OuterHtml;
         }
     }
 }
