@@ -18,7 +18,7 @@ namespace doc_loader_http_elastic
                 .DisableAutomaticProxyDetection()
                 .DisableDirectStreaming()
                 .PrettyJson()
-                .DefaultIndex("scp_documents_v01")
+                .DefaultIndex("scp_source_pages")
                 .RequestTimeout(TimeSpan.FromMinutes(2));
              Client = new ElasticClient(ElasticConnectionSettings);
         }

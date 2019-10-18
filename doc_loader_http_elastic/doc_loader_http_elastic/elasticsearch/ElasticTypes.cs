@@ -6,7 +6,9 @@ namespace doc_loader_http_elastic
 {
     class PlainDocument
     {
-        private string body ;
-        public string Body { get => body; set => body = value; }
+        private string page ;
+        private DateTime uploadedAt;
+        public string Page { get => page; set => page = value; }
+        public DateTime UploadedAt { get => uploadedAt; set => uploadedAt = value; }
     }
 }

@@ -12,17 +12,9 @@ namespace doc_loader_http_elastic
 
         static void Main(string[] args)
         {
-            Docloader documents = new Docloader();
-            var ElasticUri = new Uri("http://104.197.115.64:9200");
-            var ElasticConnectionSettings = new ConnectionSettings(ElasticUri)
-                .BasicAuthentication ("elastic","elpass")
-                .DisableAutomaticProxyDetection()
-                .DisableDirectStreaming()
-                .PrettyJson()
-                .DefaultIndex ("scp_documents_v01")
-                .RequestTimeout(TimeSpan.FromMinutes(2));
-
-            var client = new ElasticClient(ElasticConnectionSettings);
+            var documents = new Docloader();
+            var ConnectedElastic = new ElasticInteractionWrapper();
+            ConnectedElastic.OpenElasticConnection();
 
             
 
@@ -38,8 +30,9 @@ namespace doc_loader_http_elastic
             {
                 Console.WriteLine(url);
                 PlainDocument pd = new PlainDocument();
-                pd.Body = documents.GetDocumentByUrl(url);
-                var indexResponse = client.IndexDocument(pd);
+                pd.Page = documents.GetDocumentByUrl(url);
+                pd.UploadedAt = DateTime.Now;
+                var indexResponse = ConnectedElastic.SaveDocument(pd);
                 if (indexResponse.IsValid)
                 {
                     Console.WriteLine("sent to elastic");
