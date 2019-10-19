@@ -27,10 +27,15 @@ namespace doc_loader_http_elastic
             }
             return DocumentURLs;
         }
-        public string GetDocumentByUrl(string url)
+        public PlainDocument GetDocumentByUrl(string url)
         {
+            PlainDocument doc = new PlainDocument();
             HtmlWeb hw = new HtmlWeb();
-            return hw.Load(url).DocumentNode.OuterHtml;
+            var page = hw.Load(url);
+            doc.PageSource =  page.DocumentNode.OuterHtml;
+            doc.id = page.DocumentNode.SelectSingleNode("//title").InnerText;
+            return doc;
         }
+
     }
 }

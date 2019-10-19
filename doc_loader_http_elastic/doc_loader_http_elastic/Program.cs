@@ -29,8 +29,7 @@ namespace doc_loader_http_elastic
             foreach (string url in documents.GetSubDocumentUrls(MasterPages, "//a[@href]"))
             {
                 Console.WriteLine(url);
-                PlainDocument pd = new PlainDocument();
-                pd.Page = documents.GetDocumentByUrl(url);
+                PlainDocument pd = documents.GetDocumentByUrl(url);
                 pd.UploadedAt = DateTime.Now;
                 var indexResponse = ConnectedElastic.SaveDocument(pd);
                 if (indexResponse.IsValid)
