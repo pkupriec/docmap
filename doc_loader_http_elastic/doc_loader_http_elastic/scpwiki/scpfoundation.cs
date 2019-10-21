@@ -33,7 +33,8 @@ namespace doc_loader_http_elastic
             HtmlWeb hw = new HtmlWeb();
             var page = hw.Load(url);
             doc.PageSource =  page.DocumentNode.OuterHtml;
-            doc.id = page.DocumentNode.SelectSingleNode("//title").InnerText;
+            doc.Title = page.DocumentNode.SelectSingleNode("//title").InnerText;
+            doc.id = ParserHelpers.GetDeterministicHashCode(doc.Title);
             return doc;
         }
 

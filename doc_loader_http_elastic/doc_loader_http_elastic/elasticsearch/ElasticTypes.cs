@@ -8,9 +8,11 @@ namespace doc_loader_http_elastic
     {
         private string pageSource ;
         private DateTime uploadedAt;
-        private string Id;
+        private string title;
+        private int Id;
         public string PageSource { get => pageSource; set => pageSource = value; }
         public DateTime UploadedAt { get => uploadedAt; set => uploadedAt = value; }
-        public string id { get => Id; set => Id = value; }
+        public string Title { get => title; set => title = value; }
+        public int id { get => Id; set => Id = value; }
     }
 }
