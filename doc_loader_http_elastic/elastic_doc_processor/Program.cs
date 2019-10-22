@@ -1,7 +1,8 @@
 ﻿using System;
 using Nest;
 using System.Collections.Generic;
-using HtmlAgilityPack;
+
+
 
 namespace elastic_doc_processor
 {
@@ -36,9 +37,10 @@ namespace elastic_doc_processor
                     ParsedDocument.PageTitle = document.Title;
                     ParsedDocument.ItemNumber = document.Title.Replace(" - SCP Foundation", "");
                     ParsedDocument.id = ParsedDocument.ItemNumber.Replace("scp-", "");
-                    HtmlDocument doc = new HtmlDocument(); 
-                    doc.LoadHtml(document.PageSource);
-                    ParsedDocument.ObjectClass = doc.DocumentNode.SelectSingleNode("//*[@id=\"page-content\"]/p[2]/text()").InnerText.Trim();
+                    ParsedDocument.ObjectClass = DocumentHelpers.GetTextBetweenSubstrings(document.PageSource, "<p><strong>Object Class", "</p>") 
+                        .Replace("</strong>","")
+                        .Replace(":","").Trim();
+
                     //ParsedDocument.SpecialContainmentProcedures = doc.DocumentNode.SelectSingleNode("//*[@id=\"page - content\"]/p[3]/text()").InnerText.Trim();
                     //ParsedDocument.Description = doc.DocumentNode.SelectNodes ( ("//*[@id=\"page - content\"]/p[3]/text()").InnerText.Trim();
 
