@@ -12,6 +12,7 @@ namespace elastic_doc_processor
         private string objectClass;
         private string specialContainmentProcedures;
         private string description;
+        private string body;
         private string pageSource ;
         private DateTime uploadedAt;
 
@@ -21,9 +22,11 @@ namespace elastic_doc_processor
         public string ObjectClass { get => objectClass; set => objectClass = value; }
         public string SpecialContainmentProcedures { get => specialContainmentProcedures; set => specialContainmentProcedures = value; }
         public string Description { get => description; set => description = value; }
+        public string Body { get => body; set => body = value; }
         public string PageSource { get => pageSource; set => pageSource = value; }
         public DateTime UploadedAt { get => uploadedAt; set => uploadedAt = value; }
-  
+
+
     }
     class PlainDocument
     {

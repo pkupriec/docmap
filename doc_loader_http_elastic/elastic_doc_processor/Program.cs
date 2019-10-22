@@ -37,13 +37,16 @@ namespace elastic_doc_processor
                     ParsedDocument.PageTitle = document.Title;
                     ParsedDocument.ItemNumber = document.Title.Replace(" - SCP Foundation", "");
                     ParsedDocument.id = ParsedDocument.ItemNumber.Replace("scp-", "");
-                    ParsedDocument.ObjectClass = DocumentHelpers.GetScpDocumentContainmentClass(document.PageSource); 
-
+                    ParsedDocument.ObjectClass = DocumentHelpers.GetDocumentPart(document.PageSource, DocumentHelpers.ScpObjectClassSearchPatterns)
+                        .Replace("</strong>", "")
+                        .Replace(":", "");
+                    ParsedDocument.Body = DocumentHelpers.GetDocumentPart(document.PageSource, DocumentHelpers.ScpObjectBodyPatterns);
                     //ParsedDocument.SpecialContainmentProcedures = doc.DocumentNode.SelectSingleNode("//*[@id=\"page - content\"]/p[3]/text()").InnerText.Trim();
                     //ParsedDocument.Description = doc.DocumentNode.SelectNodes ( ("//*[@id=\"page - content\"]/p[3]/text()").InnerText.Trim();
 
                     ElasticClient.Index(ParsedDocument, ind => ind
                     .Index("scp_items"));
+                    Console.WriteLine("{0} from {1}, document title {2}", i, docCount, ParsedDocument.PageTitle);
                 }             
 
             }

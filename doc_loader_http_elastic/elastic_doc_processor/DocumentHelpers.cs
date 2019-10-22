@@ -2,58 +2,64 @@
 using System.Collections.Generic;
 using System.Text;
 using HtmlAgilityPack;
+using System.Text.RegularExpressions;
 
 namespace elastic_doc_processor
 {
     static class DocumentHelpers
     {
-        static public string RemoveHtmlTags(string value)
-        {
-            HtmlDocument htmlDoc = new HtmlDocument();
-            htmlDoc.LoadHtml(value);
-
-            if (htmlDoc == null)
-                return value;
-
-            return htmlDoc.DocumentNode.InnerText;
-        }
-
         static public string  GetTextBetweenSubstrings (string document, string begin,string end)
         {
             string FinalString = "";
-            int Pos1 = document.IndexOf(begin) + begin.Length;
+            int Pos1 = document.IndexOf(begin);
+            if (Pos1 < 0) return "";
+            Pos1 += begin.Length;
             int Pos2 = document.IndexOf(end, Pos1);
+            if (Pos2 < 0) return "";
             FinalString = document.Substring(Pos1, Pos2 - Pos1);
             return FinalString;
         }
 
-        static public string GetScpDocumentContainmentClass(string document)
+        static public string GetDocumentPart(string document, List<DocumentParsingPattern> searchPatterns)
         {
-            var searchPatterns = new List<ScpDocumentContainmentClassPattern>
+           
+            string DocumentPart = "";
+            foreach (DocumentParsingPattern pattern in searchPatterns)
             {
-                new ScpDocumentContainmentClassPattern(){beginPattern = "<p><strong>Object Class",endPattern =  "</p>"},
-                new ScpDocumentContainmentClassPattern(){beginPattern = "<p><strong>Object Class:",endPattern =  "</p>"},
-                new ScpDocumentContainmentClassPattern(){beginPattern = "<h1><span>Object Class:",endPattern =  "</span></h1>"},
-                new ScpDocumentContainmentClassPattern(){beginPattern = "<p><span class=\"h - span\"><strong>Object Class",endPattern =  "</p>"},
-                new ScpDocumentContainmentClassPattern(){beginPattern = "<strong>Object Class:",endPattern =  "<br />"},
-                new ScpDocumentContainmentClassPattern(){beginPattern = "2bold%22%3EObject%20Class%3A%3C%2Ftspan%3E%20",endPattern =  "%3C%2F"},
-                new ScpDocumentContainmentClassPattern(){beginPattern = "<div class=\"obj-text\">",endPattern =  "</div>"},
-                new ScpDocumentContainmentClassPattern(){beginPattern = "<strong>Object Class:</strong> <span style=\"text-decoration: line - through; \">",endPattern =  "</div>"}
-            };
-            string ObjectClass = "";
-            foreach (ScpDocumentContainmentClassPattern pattern in searchPatterns)
-            {
-                ObjectClass = DocumentHelpers.GetTextBetweenSubstrings(document, pattern.beginPattern,pattern.endPattern);
-                if (ObjectClass != "") break;
+                DocumentPart = DocumentHelpers.GetTextBetweenSubstrings(document, pattern.beginPattern,pattern.endPattern)
+                    .Trim();
+                if (DocumentPart != "") break;
             }
-            if (ObjectClass == null) ObjectClass = "NOT PARSED";
             
-            return ObjectClass.Replace("</strong>", "").Replace(":", "").Trim();
+            if (DocumentPart == "") DocumentPart = "NOT PARSED";
+            DocumentPart = Regex.Replace(DocumentPart, "<.*?>", " ");
+            return DocumentPart;
         }
 
+
+        static public List<DocumentParsingPattern> ScpObjectClassSearchPatterns = new List<DocumentParsingPattern>
+            {
+                //SCP-4487
+                new DocumentParsingPattern(){beginPattern = "<p><strong>Object Class:</strong>",endPattern =  ">1</a></sup></p><p><strong>"},
+                new DocumentParsingPattern(){beginPattern = "<strong>Object Class:</strong> <span style=\"text-decoration: line - through; \">",endPattern =  "</div>"},
+                new DocumentParsingPattern(){beginPattern = "<p><strong>Object Class",endPattern =  "</p>"},
+                new DocumentParsingPattern(){beginPattern = "<p><strong>Object Class:",endPattern =  "</p>"},
+                new DocumentParsingPattern(){beginPattern = "<h1><span>Object Class:",endPattern =  "</span></h1>"},
+                new DocumentParsingPattern(){beginPattern = "<p><span class=\"h - span\"><strong>Object Class",endPattern =  "</p>"},
+                new DocumentParsingPattern(){beginPattern = "<strong>Object Class:",endPattern =  "<br />"},
+                new DocumentParsingPattern(){beginPattern = "2bold%22%3EObject%20Class%3A%3C%2Ftspan%3E%20",endPattern =  "%3C%2F"},
+                new DocumentParsingPattern(){beginPattern = "<div class=\"obj-text\">",endPattern =  "</div>"},
+                //scp-351 
+                new DocumentParsingPattern(){beginPattern = "<div class=\"class-text\">",endPattern =  "</div>"}
+
+            };
+        static public List<DocumentParsingPattern> ScpObjectBodyPatterns = new List<DocumentParsingPattern>
+            {
+               new DocumentParsingPattern(){beginPattern = "<p><strong>Special Containment Procedures:</strong>",endPattern =  "<div class=\"footer-wikiwalk-nav\">"}
+            };
     }
 
-    public class ScpDocumentContainmentClassPattern
+    public class DocumentParsingPattern
     {
         public string beginPattern;
         public string endPattern;
