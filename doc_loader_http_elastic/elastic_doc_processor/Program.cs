@@ -39,7 +39,9 @@ namespace elastic_doc_processor
                     ParsedDocument.id = ParsedDocument.ItemNumber.Replace("scp-", "");
                     ParsedDocument.ObjectClass = DocumentHelpers.GetDocumentPart(document.PageSource, DocumentHelpers.ScpObjectClassSearchPatterns)
                         .Replace("</strong>", "")
-                        .Replace(":", "");
+                        .Replace(":", "")
+                        .ToLower()
+                        .Trim();
                     ParsedDocument.Body = DocumentHelpers.GetDocumentPart(document.PageSource, DocumentHelpers.ScpObjectBodyPatterns);
                     //ParsedDocument.SpecialContainmentProcedures = doc.DocumentNode.SelectSingleNode("//*[@id=\"page - content\"]/p[3]/text()").InnerText.Trim();
                     //ParsedDocument.Description = doc.DocumentNode.SelectNodes ( ("//*[@id=\"page - content\"]/p[3]/text()").InnerText.Trim();
