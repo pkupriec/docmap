@@ -1,7 +1,10 @@
 ﻿using System;
 using Nest;
 using System.Collections.Generic;
-
+using Google.Protobuf.Collections;
+using Google.Cloud.Language.V1;
+using Grpc.Auth;
+using Google.Apis.Auth.OAuth2;
 
 
 namespace elastic_doc_processor
@@ -19,7 +22,8 @@ namespace elastic_doc_processor
                //.DefaultIndex("scp_source_pages")
                .RequestTimeout(TimeSpan.FromMinutes(2));
             ElasticClient ElasticClient = new ElasticClient(ElasticConnectionSettings);
-
+            GoogleCredential.
+            var GoogleLanguageServiceClientclient = LanguageServiceClient.Create();
 
 
             var docCount = ElasticClient.Search<PlainDocument>(s => s.Index("scp_source_pages")).Total;
@@ -49,6 +53,8 @@ namespace elastic_doc_processor
                     ElasticClient.Index(ParsedDocument, ind => ind
                     .Index("scp_items"));
                     Console.WriteLine("{0} from {1}, document title {2}", i, docCount, ParsedDocument.PageTitle);
+
+
                 }             
 
             }
