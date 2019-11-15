@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "elastic_doc_processor": {
+      "commandName": "Project"
+    },
+    "Docker": {
+      "commandName": "Docker"
+    }
+  }
+}

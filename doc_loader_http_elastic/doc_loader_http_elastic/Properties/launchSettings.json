@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "doc_loader_http_elastic": {
+      "commandName": "Project"
+    },
+    "Docker": {
+      "commandName": "Docker"
+    }
+  }
+}
