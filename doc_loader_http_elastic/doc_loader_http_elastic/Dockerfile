@@ -3,10 +3,9 @@ WORKDIR /app
 
 FROM mcr.microsoft.com/dotnet/core/sdk:3.0-buster AS build
 WORKDIR /src
-COPY ["doc_loader_http_elastic.csproj", "/"]
+COPY ["doc_loader_http_elastic.csproj", "."]
 RUN dotnet restore "doc_loader_http_elastic.csproj"
 COPY . .
-WORKDIR "/src/doc_loader_http_elastic"
 RUN dotnet build "doc_loader_http_elastic.csproj" -c Release -o /app/build
 
 FROM build AS publish
