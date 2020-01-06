@@ -5,7 +5,7 @@ FROM mcr.microsoft.com/dotnet/core/sdk:3.0-buster AS build
 WORKDIR /src
 COPY ["elastic_doc_processor/elastic_doc_processor.csproj", "elastic_doc_processor/"]
 RUN dotnet restore "elastic_doc_processor/elastic_doc_processor.csproj"
-COPY . .
+COPY "elastic_doc_processor/" .
 WORKDIR "/src/elastic_doc_processor"
 RUN dotnet build "elastic_doc_processor.csproj" -c Release -o /app/build
 

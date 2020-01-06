@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using Google.Cloud.Language.V1;
 
 namespace elastic_doc_processor
 {
@@ -24,6 +25,7 @@ namespace elastic_doc_processor
         public string Description { get => description; set => description = value; }
         public string Body { get => body; set => body = value; }
         public string PageSource { get => pageSource; set => pageSource = value; }
+        public languageAnalyzerResult languageAnalyzerResult { get => languageAnalyzerResult; set => languageAnalyzerResult = value; }
         public DateTime UploadedAt { get => uploadedAt; set => uploadedAt = value; }
 
 
@@ -39,4 +41,10 @@ namespace elastic_doc_processor
         public string Title { get => title; set => title = value; }
         public int id { get => Id; set => Id = value; }
     }
+
+    class languageAnalyzerResult
+    {
+        public Sentiment DocumentSentiment { get => DocumentSentiment; set => DocumentSentiment = value; }
+    }
 }
+

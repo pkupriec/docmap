@@ -1,7 +1,10 @@
 {
   "profiles": {
     "elastic_doc_processor": {
-      "commandName": "Project"
+      "commandName": "Project",
+      "environmentVariables": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "D:\\clouds\\GoogleDrive\\GAPI\\NLA.json"
+      }
     },
     "Docker": {
       "commandName": "Docker"

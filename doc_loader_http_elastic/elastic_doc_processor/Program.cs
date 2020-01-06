@@ -1,10 +1,7 @@
 ﻿using System;
 using Nest;
 using System.Collections.Generic;
-using Google.Protobuf.Collections;
 using Google.Cloud.Language.V1;
-using Grpc.Auth;
-using Google.Apis.Auth.OAuth2;
 
 
 namespace elastic_doc_processor
@@ -22,8 +19,9 @@ namespace elastic_doc_processor
                //.DefaultIndex("scp_source_pages")
                .RequestTimeout(TimeSpan.FromMinutes(2));
             ElasticClient ElasticClient = new ElasticClient(ElasticConnectionSettings);
-            GoogleCredential.
-            var GoogleLanguageServiceClientclient = LanguageServiceClient.Create();
+            LanguageServiceClient client = LanguageServiceClient.Create();
+
+
 
 
             var docCount = ElasticClient.Search<PlainDocument>(s => s.Index("scp_source_pages")).Total;
@@ -37,18 +35,20 @@ namespace elastic_doc_processor
                 foreach (PlainDocument document in Documents)
                 {
                     ScpSpecialContainmentDocument ParsedDocument = new ScpSpecialContainmentDocument();
-                    
+                    //Parser part
                     ParsedDocument.PageTitle = document.Title;
                     ParsedDocument.ItemNumber = document.Title.Replace(" - SCP Foundation", "");
                     ParsedDocument.id = ParsedDocument.ItemNumber.Replace("scp-", "");
-                    ParsedDocument.ObjectClass = DocumentHelpers.GetDocumentPart(document.PageSource, DocumentHelpers.ScpObjectClassSearchPatterns)
-                        .Replace("</strong>", "")
-                        .Replace(":", "")
-                        .ToLower()
-                        .Trim();
+                    ParsedDocument.ObjectClass = DocumentHelpers.GetDocumentPart(document.PageSource, DocumentHelpers.ScpObjectClassSearchPatterns);
                     ParsedDocument.Body = DocumentHelpers.GetDocumentPart(document.PageSource, DocumentHelpers.ScpObjectBodyPatterns);
-                    //ParsedDocument.SpecialContainmentProcedures = doc.DocumentNode.SelectSingleNode("//*[@id=\"page - content\"]/p[3]/text()").InnerText.Trim();
-                    //ParsedDocument.Description = doc.DocumentNode.SelectNodes ( ("//*[@id=\"page - content\"]/p[3]/text()").InnerText.Trim();
+                    //Languagae analyzer part
+                    var features = new AnnotateTextRequest.Types.Features();
+                    features.ExtractDocumentSentiment = true;
+                    features.ExtractEntities = true;
+                    features.ExtractEntitySentiment = true;
+                    AnnotateTextResponse response = client.AnnotateText(Document.FromPlainText(ParsedDocument.Body),features);
+                    ParsedDocument.languageAnalyzerResult.DocumentSentiment = response.DocumentSentiment;
+
 
                     ElasticClient.Index(ParsedDocument, ind => ind
                     .Index("scp_items"));

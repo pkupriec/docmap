@@ -5,7 +5,9 @@ VisualStudioVersion = 16.0.29324.140
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "doc_loader_http_elastic", "doc_loader_http_elastic\doc_loader_http_elastic.csproj", "{FCE060EC-B7CE-4EEA-BBB7-DA69CE7B0D68}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "elastic_doc_processor", "elastic_doc_processor\elastic_doc_processor.csproj", "{FF161592-AA32-43D4-B2B5-EC443910E4FA}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "elastic_doc_parser", "elastic_doc_processor\elastic_doc_parser.csproj", "{FF161592-AA32-43D4-B2B5-EC443910E4FA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "google_api_doc_processor", "google_api_doc_processor\google_api_doc_processor.csproj", "{F66D74E4-AA13-4C50-B0AB-2953A075C6FF}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -21,6 +23,10 @@ Global
 		{FF161592-AA32-43D4-B2B5-EC443910E4FA}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FF161592-AA32-43D4-B2B5-EC443910E4FA}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{FF161592-AA32-43D4-B2B5-EC443910E4FA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F66D74E4-AA13-4C50-B0AB-2953A075C6FF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F66D74E4-AA13-4C50-B0AB-2953A075C6FF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F66D74E4-AA13-4C50-B0AB-2953A075C6FF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F66D74E4-AA13-4C50-B0AB-2953A075C6FF}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

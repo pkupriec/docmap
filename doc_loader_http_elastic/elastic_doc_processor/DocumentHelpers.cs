@@ -33,7 +33,11 @@ namespace elastic_doc_processor
             
             if (DocumentPart == "") DocumentPart = "NOT PARSED";
             DocumentPart = Regex.Replace(DocumentPart, "<.*?>", " ");
-            return DocumentPart;
+            return DocumentPart
+                .Replace("</strong>", "")
+                .Replace(":", "")
+                .ToLower()
+                .Trim();
         }
 
 
