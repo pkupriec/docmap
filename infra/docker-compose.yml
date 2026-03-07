@@ -1,0 +1,40 @@
+services:
+
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: docmap-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: docmap
+      POSTGRES_USER: docmap
+      POSTGRES_PASSWORD: docmap
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ../database/seed_scp_objects.sql:/docker-entrypoint-initdb.d/seed_scp_objects.sql
+
+  app:
+    build: ..
+    container_name: docmap-app
+
+    depends_on:
+      - postgres
+
+    environment:
+      DATABASE_URL: postgresql://docmap:docmap@postgres:5432/docmap
+      OLLAMA_HOST: http://host.docker.internal:11434
+
+    volumes:
+      - ..:/app
+
+    working_dir: /app
+
+    command: sleep infinity
+
+volumes:
+  postgres_data:
