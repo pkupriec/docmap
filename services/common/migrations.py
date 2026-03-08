@@ -62,12 +62,31 @@ def _wait_for_db_ready(max_wait_seconds: int = 30, interval_seconds: float = 1.0
         raise last_error
 
 
+def _apply_runtime_schema_patches() -> None:
+    """Apply lightweight idempotent schema patches needed by runtime code."""
+    with get_connection() as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS document_snapshots
+                ADD COLUMN IF NOT EXISTS pdf_blob BYTEA
+                """
+            )
+
+
 def run_startup_migrations() -> None:
     """Optional startup schema reset for development.
 
     Controlled by env var `DB_RESET_ON_START`.
     Values treated as true: 1, true, yes, on.
     """
+
+    _wait_for_db_ready(
+        max_wait_seconds=int(os.getenv("DB_STARTUP_MAX_WAIT_SECONDS", "30")),
+        interval_seconds=float(os.getenv("DB_STARTUP_RETRY_INTERVAL_SECONDS", "1")),
+    )
+    _apply_runtime_schema_patches()
 
     flag = os.getenv("DB_RESET_ON_START", "0").strip().lower()
     should_reset = flag in {"1", "true", "yes", "on"}
@@ -77,11 +96,6 @@ def run_startup_migrations() -> None:
 
     root = Path(__file__).resolve().parents[2]
     sql_paths = [root / rel for rel in SQL_FILES]
-
-    _wait_for_db_ready(
-        max_wait_seconds=int(os.getenv("DB_STARTUP_MAX_WAIT_SECONDS", "30")),
-        interval_seconds=float(os.getenv("DB_STARTUP_RETRY_INTERVAL_SECONDS", "1")),
-    )
 
     drop_flag = os.getenv("DB_DROP_TABLES_ON_START", "0").strip().lower()
     should_drop = drop_flag in {"1", "true", "yes", "on"}

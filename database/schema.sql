@@ -35,7 +35,7 @@ CREATE TABLE document_snapshots (
     document_id UUID NOT NULL REFERENCES documents(id),
     raw_html TEXT,
     clean_text TEXT,
-    pdf_path TEXT,
+    pdf_blob BYTEA,
     created_at TIMESTAMP DEFAULT now()
 );
 
