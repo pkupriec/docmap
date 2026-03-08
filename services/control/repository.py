@@ -35,26 +35,28 @@ class ControlRepository:
         payload = payload_json or {}
         with self._connect() as conn:
             with conn.cursor() as cur:
-                try:
-                    cur.execute(
-                        """
-                        INSERT INTO pipeline_commands
-                            (command_type, pipeline_run_id, stage_name, payload_json, requested_by, dedupe_key)
-                        VALUES (%s, %s, %s, %s::jsonb, %s, %s)
-                        RETURNING id
-                        """,
-                        (
-                            command_type,
-                            pipeline_run_id,
-                            stage_name,
-                            json.dumps(payload),
-                            requested_by,
-                            dedupe_key,
-                        ),
-                    )
-                except psycopg.errors.UniqueViolation as exc:
-                    raise DuplicatePendingCommandError() from exc
-                command_id = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    INSERT INTO pipeline_commands
+                        (command_type, pipeline_run_id, stage_name, payload_json, requested_by, dedupe_key)
+                    VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                    ON CONFLICT (dedupe_key) WHERE (status = 'pending' AND dedupe_key IS NOT NULL)
+                    DO NOTHING
+                    RETURNING id
+                    """,
+                    (
+                        command_type,
+                        pipeline_run_id,
+                        stage_name,
+                        json.dumps(payload),
+                        requested_by,
+                        dedupe_key,
+                    ),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise DuplicatePendingCommandError()
+                command_id = row[0]
             conn.commit()
         return int(command_id)
 
@@ -73,7 +75,9 @@ class ControlRepository:
                         SELECT *
                         FROM pipeline_commands
                         WHERE status IN ('pending', 'accepted')
-                        ORDER BY id ASC
+                        ORDER BY
+                            CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+                            id ASC
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
                         """
@@ -525,6 +529,40 @@ class ControlRepository:
                     (run_id, stage_name),
                 )
                 return bool(cur.fetchone()[0])
+
+    def has_pending_cancel_command(self, run_id: int) -> bool:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pipeline_commands
+                        WHERE command_type = 'cancel_run'
+                          AND pipeline_run_id = %s
+                          AND status IN ('pending', 'accepted')
+                    )
+                    """,
+                    (run_id,),
+                )
+                return bool(cur.fetchone()[0])
+
+    def mark_cancel_commands_applied(self, run_id: int) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE pipeline_commands
+                    SET status = 'applied',
+                        processed_at = NOW(),
+                        error_message = NULL
+                    WHERE command_type = 'cancel_run'
+                      AND pipeline_run_id = %s
+                      AND status IN ('pending', 'accepted')
+                    """,
+                    (run_id,),
+                )
+            conn.commit()
 
     def get_latest_state_snapshot(self, run_id: int, after_log_id: int = 0) -> dict[str, Any]:
         run = self.get_run(run_id)

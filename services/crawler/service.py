@@ -38,6 +38,7 @@ class BatchCrawlResult:
 
 
 DocumentCallback = Callable[[int, int, int, str, CrawlResult | None, str | None], None]
+StopCallback = Callable[[], bool]
 
 
 def process_document(
@@ -110,6 +111,7 @@ def process_documents(
     *,
     resnapshot: bool = False,
     on_document: DocumentCallback | None = None,
+    should_stop: StopCallback | None = None,
 ) -> BatchCrawlResult:
     logger.info("crawler.batch_start urls=%s resnapshot=%s", len(urls), resnapshot)
     throttler = RequestThrottler()
@@ -117,6 +119,9 @@ def process_documents(
     failed_urls: list[str] = []
 
     for idx, url in enumerate(urls, start=1):
+        if should_stop and should_stop():
+            logger.info("crawler.batch_stop_requested processed=%s total=%s", idx - 1, len(urls))
+            break
         try:
             result = process_document(
                 url,

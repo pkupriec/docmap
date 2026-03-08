@@ -14,7 +14,7 @@ from services.geocoder import normalize_pending_mentions, process_pending_mentio
 
 logger = logging.getLogger(__name__)
 SCP_START = 1
-SCP_END = 20
+SCP_END = 7999
 
 
 @dataclass(frozen=True)

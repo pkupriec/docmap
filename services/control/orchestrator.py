@@ -56,9 +56,24 @@ class ControlOrchestrator:
         if active["status"] == "pending":
             self._execute_run(active["id"])
             return
-        if active["status"] == "cancelling" and not active.get("current_stage_name"):
+        if active["status"] == "cancelling":
+            current_stage = active.get("current_stage_name")
+            if current_stage:
+                self.repository.set_stage_status(
+                    active["id"],
+                    current_stage,
+                    "skipped",
+                    error_message="cancelled",
+                )
             self.repository.set_run_status(active["id"], "cancelled", current_stage_name=None)
-            self.repository.append_log(active["id"], None, "pipeline", "INFO", "Run cancelled before start", event_type="run_status")
+            self.repository.append_log(
+                active["id"],
+                current_stage,
+                "pipeline",
+                "INFO",
+                "Run cancelled",
+                event_type="run_status",
+            )
 
     def _apply_command(self, command: dict[str, Any]) -> None:
         command_type = command["command_type"]
@@ -249,6 +264,7 @@ class ControlOrchestrator:
                 urls = generate_scp_urls(1, 7999)
 
             total = len(urls)
+            stop_requested = False
             self.repository.upsert_progress(
                 run_id,
                 stage,
@@ -267,6 +283,22 @@ class ControlOrchestrator:
                 _result: Any,
                 error: str | None,
             ) -> None:
+                nonlocal stop_requested
+                if not stop_requested and self.repository.has_pending_cancel_command(run_id):
+                    self.repository.mark_active_run_cancelling(run_id)
+                    self.repository.mark_cancel_commands_applied(run_id)
+                    stop_requested = True
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "pipeline",
+                        "INFO",
+                        "Cancellation requested; stopping crawl at next boundary",
+                        event_type="run_status",
+                        document_url=url,
+                        current_index=processed,
+                    )
+
                 self.repository.upsert_progress(
                     run_id,
                     stage,
@@ -311,7 +343,11 @@ class ControlOrchestrator:
                         current_index=processed,
                     )
 
-            result = process_documents(urls, on_document=on_crawl_document)
+            result = process_documents(
+                urls,
+                on_document=on_crawl_document,
+                should_stop=lambda: stop_requested,
+            )
             self.repository.upsert_progress(
                 run_id,
                 stage,
