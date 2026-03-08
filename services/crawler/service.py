@@ -10,6 +10,7 @@ from services.crawler.parser import extract_clean_text, extract_title
 from services.crawler.pdf_renderer import render_pdf_blob
 from services.crawler.repository import (
     canonical_number_from_url,
+    get_latest_snapshot_missing_pdf,
     get_or_create_document,
     get_or_create_scp_object,
     set_snapshot_pdf_blob,
@@ -95,6 +96,23 @@ def process_document(
             conn.commit()
             logger.info("crawler.snapshot_created url=%s snapshot_id=%s", url, snapshot_id)
         else:
+            missing_pdf_snapshot_id = get_latest_snapshot_missing_pdf(conn, document_id)
+            if missing_pdf_snapshot_id:
+                try:
+                    pdf_blob = render_pdf_blob(url)
+                    set_snapshot_pdf_blob(conn, missing_pdf_snapshot_id, pdf_blob)
+                    logger.info(
+                        "crawler.snapshot_pdf_backfilled url=%s snapshot_id=%s",
+                        url,
+                        missing_pdf_snapshot_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "crawler.pdf_backfill_failed_nonfatal url=%s snapshot_id=%s error=%s",
+                        url,
+                        missing_pdf_snapshot_id,
+                        exc,
+                    )
             conn.commit()
             logger.info("crawler.snapshot_skipped_unchanged url=%s", url)
 

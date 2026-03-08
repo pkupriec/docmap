@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 class LatestSnapshot:
     snapshot_id: str
     clean_text: str
+    has_pdf_blob: bool
 
 
 def canonical_number_from_url(url: str) -> str | None:
@@ -69,7 +70,7 @@ def get_latest_snapshot(conn: Connection, document_id: str) -> LatestSnapshot | 
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, clean_text
+            SELECT id, clean_text, pdf_blob IS NOT NULL AS has_pdf_blob
             FROM document_snapshots
             WHERE document_id = %s
             ORDER BY created_at DESC
@@ -80,7 +81,11 @@ def get_latest_snapshot(conn: Connection, document_id: str) -> LatestSnapshot | 
         row = cur.fetchone()
         if not row:
             return None
-        return LatestSnapshot(snapshot_id=str(row[0]), clean_text=row[1] or "")
+        return LatestSnapshot(
+            snapshot_id=str(row[0]),
+            clean_text=row[1] or "",
+            has_pdf_blob=bool(row[2]),
+        )
 
 
 def save_snapshot_if_changed(
@@ -123,3 +128,10 @@ def set_snapshot_pdf_blob(conn: Connection, snapshot_id: str, pdf_blob: bytes) -
             """,
             (pdf_blob, snapshot_id),
         )
+
+
+def get_latest_snapshot_missing_pdf(conn: Connection, document_id: str) -> str | None:
+    latest = get_latest_snapshot(conn, document_id)
+    if not latest or latest.has_pdf_blob:
+        return None
+    return latest.snapshot_id

@@ -15,6 +15,7 @@ from services.geocoder import normalize_pending_mentions, process_pending_mentio
 
 
 logger = logging.getLogger(__name__)
+TEST_CRAWL_LIMIT = 20
 
 
 class ControlOrchestrator:
@@ -261,7 +262,15 @@ class ControlOrchestrator:
                 end = int(params["document_range"].get("end", start))
                 urls = generate_scp_urls(start, end)
             else:
-                urls = generate_scp_urls(1, 7999)
+                urls = generate_scp_urls(1, TEST_CRAWL_LIMIT)
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "pipeline",
+                    "INFO",
+                    f"Crawl limited to first {TEST_CRAWL_LIMIT} documents",
+                    event_type="progress",
+                )
 
             total = len(urls)
             stop_requested = False
