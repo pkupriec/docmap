@@ -8,6 +8,7 @@ from fastapi import APIRouter, FastAPI, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from services.common.logging import configure_logging
+from services.common.migrations import run_startup_migrations
 from services.control.constants import PIPELINE_TYPES, TARGET_SCOPES
 from services.control.orchestrator import ControlOrchestrator
 from services.control.repository import ControlRepository, DuplicatePendingCommandError
@@ -219,6 +220,7 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def _startup() -> None:
         configure_logging()
+        run_startup_migrations()
         orchestrator.start()
 
     @app.on_event("shutdown")

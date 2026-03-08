@@ -21,6 +21,16 @@ Version.cpp
 project.lock.json
 .DS_Store
 *.pyc
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+env/
 
 # Visual Studio Code
 .vscode
@@ -48,3 +58,21 @@ msbuild.wrn
 
 # Visual Studio 2015
 .vs/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node / frontend
+node_modules/
+ui/node_modules/
+ui/dist/
+ui/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / tooling
+Thumbs.db
