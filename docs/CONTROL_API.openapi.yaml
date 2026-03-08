@@ -1,0 +1,657 @@
+openapi: 3.1.0
+info:
+  title: DocMap Control API
+  version: "1.0.0"
+  description: >
+    Control plane and monitoring API for DocMap pipeline runs.
+
+servers:
+  - url: /api
+
+tags:
+  - name: runs
+  - name: commands
+  - name: monitoring
+
+paths:
+  /runs:
+    get:
+      tags: [runs]
+      summary: List pipeline runs
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: status
+          schema:
+            $ref: "#/components/schemas/PipelineRunStatus"
+        - in: query
+          name: pipeline_type
+          schema:
+            $ref: "#/components/schemas/PipelineType"
+      responses:
+        "200":
+          description: Runs list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PipelineRun"
+    post:
+      tags: [commands]
+      summary: Start a new pipeline run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartRunRequest"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAcceptedResponse"
+        "409":
+          description: Duplicate pending command or invalid replacement request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /runs/{run_id}:
+    get:
+      tags: [runs]
+      summary: Get pipeline run details
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PipelineRunDetail"
+        "404":
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /runs/{run_id}/stages:
+    get:
+      tags: [monitoring]
+      summary: List stage states for a pipeline run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Stage list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PipelineStageRun"
+        "404":
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /runs/{run_id}/progress:
+    get:
+      tags: [monitoring]
+      summary: Get current progress state for a pipeline run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Progress rows
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PipelineProgress"
+        "404":
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /runs/{run_id}/logs:
+    get:
+      tags: [monitoring]
+      summary: Get persisted logs for a pipeline run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - in: query
+          name: after_id
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+        - in: query
+          name: level
+          schema:
+            type: string
+        - in: query
+          name: stage_name
+          schema:
+            type: string
+        - in: query
+          name: service_name
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Log rows ordered by id ascending
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PipelineLog"
+        "404":
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /runs/{run_id}/events:
+    get:
+      tags: [monitoring]
+      summary: SSE event stream for a pipeline run
+      description: >
+        Server-Sent Events stream. Event types: run_status, stage_status,
+        progress, log, heartbeat.
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - in: query
+          name: last_event_id
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /runs/{run_id}/cancel:
+    post:
+      tags: [commands]
+      summary: Request soft cancellation of a pipeline run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAcceptedResponse"
+        "404":
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /runs/{run_id}/retry:
+    post:
+      tags: [commands]
+      summary: Retry a pipeline run by creating a new run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetryRunRequest"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAcceptedResponse"
+        "404":
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /runs/{run_id}/stages/{stage_name}/retry:
+    post:
+      tags: [commands]
+      summary: Retry a stage and all downstream stages
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - in: path
+          name: stage_name
+          required: true
+          schema:
+            $ref: "#/components/schemas/StageName"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAcceptedResponse"
+        "404":
+          description: Run or stage not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /commands/{command_id}:
+    get:
+      tags: [commands]
+      summary: Get command status
+      parameters:
+        - in: path
+          name: command_id
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Command details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PipelineCommand"
+        "404":
+          description: Command not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  parameters:
+    RunId:
+      in: path
+      name: run_id
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+  schemas:
+    PipelineRunStatus:
+      type: string
+      enum: [pending, running, cancelling, cancelled, failed, success]
+
+    PipelineStageStatus:
+      type: string
+      enum: [pending, running, success, failed, skipped]
+
+    PipelineCommandStatus:
+      type: string
+      enum: [pending, accepted, applied, rejected, failed]
+
+    PipelineType:
+      type: string
+      enum:
+        - full_pipeline
+        - crawl_only
+        - extract_only
+        - geocode_only
+        - analytics_only
+        - export_only
+
+    StageName:
+      type: string
+      enum: [crawl, extract, geocode, analytics, export]
+
+    TargetScope:
+      type: string
+      enum: [all, single_document, document_range, incremental]
+
+    PipelineRun:
+      type: object
+      required:
+        - id
+        - pipeline_type
+        - status
+        - target_scope
+        - parameters_json
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+        pipeline_type:
+          $ref: "#/components/schemas/PipelineType"
+        status:
+          $ref: "#/components/schemas/PipelineRunStatus"
+        current_stage_name:
+          type: string
+          nullable: true
+        target_scope:
+          $ref: "#/components/schemas/TargetScope"
+        parameters_json:
+          type: object
+          additionalProperties: true
+        requested_by:
+          type: string
+          nullable: true
+        replacement_for_run_id:
+          type: integer
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PipelineStageRun:
+      type: object
+      required:
+        - id
+        - pipeline_run_id
+        - stage_name
+        - status
+        - stage_order
+        - items_completed
+        - items_failed
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+        pipeline_run_id:
+          type: integer
+        stage_name:
+          $ref: "#/components/schemas/StageName"
+        status:
+          $ref: "#/components/schemas/PipelineStageStatus"
+        stage_order:
+          type: integer
+        items_total:
+          type: integer
+          nullable: true
+        items_completed:
+          type: integer
+        items_failed:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PipelineProgress:
+      type: object
+      required:
+        - pipeline_run_id
+        - stage_name
+        - current_index
+        - items_completed
+        - items_failed
+        - updated_at
+      properties:
+        pipeline_run_id:
+          type: integer
+        stage_name:
+          $ref: "#/components/schemas/StageName"
+        current_index:
+          type: integer
+        total_items:
+          type: integer
+          nullable: true
+        items_completed:
+          type: integer
+        items_failed:
+          type: integer
+        current_document_id:
+          type: integer
+          nullable: true
+        current_document_url:
+          type: string
+          nullable: true
+        current_item_label:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+
+    PipelineLog:
+      type: object
+      required:
+        - id
+        - pipeline_run_id
+        - service_name
+        - level
+        - message
+        - created_at
+      properties:
+        id:
+          type: integer
+        pipeline_run_id:
+          type: integer
+        stage_name:
+          type: string
+          nullable: true
+        service_name:
+          type: string
+        level:
+          type: string
+        event_type:
+          type: string
+          nullable: true
+        message:
+          type: string
+        document_id:
+          type: integer
+          nullable: true
+        document_url:
+          type: string
+          nullable: true
+        current_index:
+          type: integer
+          nullable: true
+        payload_json:
+          type: object
+          additionalProperties: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    PipelineCommand:
+      type: object
+      required:
+        - id
+        - command_type
+        - status
+        - payload_json
+        - requested_at
+      properties:
+        id:
+          type: integer
+        command_type:
+          type: string
+          enum: [start_run, cancel_run, retry_run, retry_stage]
+        pipeline_run_id:
+          type: integer
+          nullable: true
+        stage_name:
+          type: string
+          nullable: true
+        payload_json:
+          type: object
+          additionalProperties: true
+        status:
+          $ref: "#/components/schemas/PipelineCommandStatus"
+        requested_by:
+          type: string
+          nullable: true
+        requested_at:
+          type: string
+          format: date-time
+        processed_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+
+    StartRunRequest:
+      type: object
+      required: [pipeline_type, target_scope]
+      properties:
+        pipeline_type:
+          $ref: "#/components/schemas/PipelineType"
+        target_scope:
+          $ref: "#/components/schemas/TargetScope"
+        document_url:
+          type: string
+          nullable: true
+        document_range:
+          type: object
+          nullable: true
+          properties:
+            start:
+              type: integer
+            end:
+              type: integer
+        options:
+          type: object
+          additionalProperties: true
+          default: {}
+
+    RetryRunRequest:
+      type: object
+      properties:
+        options:
+          type: object
+          additionalProperties: true
+          default: {}
+
+    CommandAcceptedResponse:
+      type: object
+      required: [command_id, status]
+      properties:
+        command_id:
+          type: integer
+        status:
+          type: string
+          enum: [pending, accepted]
+        message:
+          type: string
+          nullable: true
+
+    PipelineRunDetail:
+      type: object
+      required: [run, stages, progress]
+      properties:
+        run:
+          $ref: "#/components/schemas/PipelineRun"
+        stages:
+          type: array
+          items:
+            $ref: "#/components/schemas/PipelineStageRun"
+        progress:
+          type: array
+          items:
+            $ref: "#/components/schemas/PipelineProgress"
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+          nullable: true

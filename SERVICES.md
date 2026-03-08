@@ -158,3 +158,29 @@ Determinism:
 - validated outputs
 - structured logs
 - no hidden side effects
+
+
+## Control Plane Service
+
+A control plane layer is introduced.
+
+Responsibilities:
+
+* accept control commands
+* expose monitoring API
+* provide SSE event stream
+
+The control plane writes:
+
+* pipeline_commands
+
+The pipeline orchestrator writes:
+
+* pipeline_runs
+* pipeline_stage_runs
+* pipeline_progress
+* pipeline_logs
+
+The control API must never mutate run or stage state directly.
+
+Only the orchestrator may apply commands.

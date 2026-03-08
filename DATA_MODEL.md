@@ -362,3 +362,74 @@ bi_document_locations
 
 
 BI tables are derived and may be rebuilt at any time.
+
+
+## Operational Control Plane Tables
+
+The control plane introduces operational metadata tables.
+
+These tables are not part of canonical SCP data.
+
+They may be cleaned or archived.
+
+### pipeline_commands
+
+Command queue for pipeline control.
+
+Fields:
+
+* id
+* command_type
+* pipeline_run_id
+* stage_name
+* payload_json
+* status
+* requested_at
+* processed_at
+* error_message
+
+---
+
+### pipeline_logs
+
+Primary operator log storage.
+
+Fields:
+
+* id
+* pipeline_run_id
+* stage_name
+* service_name
+* level
+* message
+* document_id
+* document_url
+* current_index
+* payload_json
+* created_at
+
+Retention:
+
+logs may be removed after 10 runs.
+
+---
+
+### pipeline_progress
+
+Current progress state.
+
+One row per:
+
+pipeline_run_id + stage_name
+
+Fields:
+
+* current_index
+* total_items
+* items_completed
+* items_failed
+* current_document_id
+* current_document_url
+* current_item_label
+* message
+* updated_at

@@ -407,3 +407,24 @@ Implementation stance:
 
 - prefer deciding "how to implement" rather than "what to build" when the architecture and task files already answer the latter
 - if the docs are explicit, implement them directly instead of re-deriving product or architecture choices
+
+
+## Phase 10 — Control Plane Implementation
+
+Agents implementing phase10_control_plane must:
+
+1. Implement control API in the existing Python application.
+2. Implement pipeline_commands command queue.
+3. Implement orchestrator command polling loop.
+4. Implement pipeline_logs logging.
+5. Implement pipeline_progress updates.
+6. Implement SSE endpoint.
+7. Implement React UI.
+
+Agents must not:
+
+* introduce message brokers
+* introduce multiple command workers
+* introduce multiple concurrent runs
+* introduce scheduling systems
+* introduce authentication systems

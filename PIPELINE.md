@@ -222,3 +222,53 @@ Each stage and the overall pipeline must also emit a completion summary with:
 - Export failures never force recrawl or re-extraction.
 - Fatal infrastructure failures stop the run after preserving already committed progress.
 - External dependency outages that require operator intervention stop the run rather than degrading silently.
+
+
+## Command Processing
+
+Pipeline execution is controlled through pipeline_commands.
+
+Commands are written by the control API.
+
+The orchestrator polls commands and applies them.
+
+Commands are processed:
+
+* sequentially
+* in id order
+* with row locking
+
+Only one command modifying a run may execute at a time.
+
+---
+
+## Concurrency Model
+
+Only one pipeline run may be active at any time.
+
+Active statuses:
+
+pending
+running
+cancelling
+
+If a new start_run command arrives while a run is active:
+
+the active run enters cancelling
+after cancellation a new run starts.
+
+---
+
+## Retry Semantics
+
+retry_run:
+
+creates a new run.
+
+retry_stage:
+
+resets the stage and downstream stages.
+
+If run is active:
+
+cancel first, then restart.
