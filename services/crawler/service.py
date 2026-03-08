@@ -2,19 +2,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Callable
 
 from services.common.db import get_connection
 from services.crawler.downloader import RequestThrottler, download_page
 from services.crawler.parser import extract_clean_text, extract_title
-from services.crawler.pdf_renderer import render_pdf
+from services.crawler.pdf_renderer import render_pdf_blob
 from services.crawler.repository import (
     canonical_number_from_url,
     get_or_create_document,
     get_or_create_scp_object,
-    set_snapshot_pdf_path,
+    set_snapshot_pdf_blob,
     save_snapshot_if_changed,
 )
 
@@ -45,7 +43,6 @@ DocumentCallback = Callable[[int, int, int, str, CrawlResult | None, str | None]
 def process_document(
     url: str,
     *,
-    pdf_dir: str = "snapshots",
     resnapshot: bool = False,
     throttler: RequestThrottler | None = None,
 ) -> CrawlResult:
@@ -74,26 +71,24 @@ def process_document(
             title=title,
         )
 
-        pdf_path = _build_pdf_path(url, pdf_dir)
         snapshot_id, created = save_snapshot_if_changed(
             conn,
             document_id=document_id,
             raw_html=raw_html,
             clean_text=clean_text,
-            pdf_path=None,
+            pdf_blob=None,
             resnapshot=resnapshot,
         )
 
         if created:
             try:
-                render_pdf(url, pdf_path)
+                pdf_blob = render_pdf_blob(url)
                 if snapshot_id:
-                    set_snapshot_pdf_path(conn, snapshot_id, pdf_path)
+                    set_snapshot_pdf_blob(conn, snapshot_id, pdf_blob)
             except Exception as exc:
                 logger.warning(
-                    "crawler.pdf_render_failed_nonfatal url=%s output_path=%s error=%s",
+                    "crawler.pdf_render_failed_nonfatal url=%s error=%s",
                     url,
-                    pdf_path,
                     exc,
                 )
             conn.commit()
@@ -113,7 +108,6 @@ def process_document(
 def process_documents(
     urls: list[str],
     *,
-    pdf_dir: str = "snapshots",
     resnapshot: bool = False,
     on_document: DocumentCallback | None = None,
 ) -> BatchCrawlResult:
@@ -126,7 +120,6 @@ def process_documents(
         try:
             result = process_document(
                 url,
-                pdf_dir=pdf_dir,
                 resnapshot=resnapshot,
                 throttler=throttler,
             )
@@ -153,10 +146,3 @@ def process_documents(
         result.failed,
     )
     return result
-
-
-def _build_pdf_path(url: str, pdf_dir: str) -> str:
-    slug = url.rstrip("/").split("/")[-1]
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    path = Path(pdf_dir) / f"{slug}_{timestamp}.pdf"
-    return str(path)

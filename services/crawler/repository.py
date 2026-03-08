@@ -89,7 +89,7 @@ def save_snapshot_if_changed(
     document_id: str,
     raw_html: str,
     clean_text: str,
-    pdf_path: str | None,
+    pdf_blob: bytes | None,
     resnapshot: bool = False,
 ) -> tuple[str | None, bool]:
     latest = get_latest_snapshot(conn, document_id)
@@ -102,24 +102,24 @@ def save_snapshot_if_changed(
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO document_snapshots (document_id, raw_html, clean_text, pdf_path)
+            INSERT INTO document_snapshots (document_id, raw_html, clean_text, pdf_blob)
             VALUES (%s, %s, %s, %s)
             RETURNING id
             """,
-            (document_id, raw_html, clean_text, pdf_path),
+            (document_id, raw_html, clean_text, pdf_blob),
         )
         snapshot_id = str(cur.fetchone()[0])
         logger.info("crawler.snapshot_saved document_id=%s snapshot_id=%s", document_id, snapshot_id)
         return (snapshot_id, True)
 
 
-def set_snapshot_pdf_path(conn: Connection, snapshot_id: str, pdf_path: str) -> None:
+def set_snapshot_pdf_blob(conn: Connection, snapshot_id: str, pdf_blob: bytes) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
             UPDATE document_snapshots
-            SET pdf_path = %s
+            SET pdf_blob = %s
             WHERE id = %s
             """,
-            (pdf_path, snapshot_id),
+            (pdf_blob, snapshot_id),
         )

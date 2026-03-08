@@ -3,24 +3,32 @@ from __future__ import annotations
 import shutil
 import subprocess
 import logging
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def render_pdf(url: str, output_path: str, *, timeout_seconds: int = 90) -> str:
+def render_pdf_blob(url: str, *, timeout_seconds: int = 90) -> bytes:
     if shutil.which("wkhtmltopdf") is None:
         logger.error("crawler.pdf_renderer_missing_binary")
         raise RuntimeError("wkhtmltopdf is not installed or not in PATH")
 
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    logger.info("crawler.pdf_render_start url=%s output_path=%s", url, output_path)
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
 
-    subprocess.run(
-        ["wkhtmltopdf", "--quiet", url, str(output)],
-        check=True,
-        timeout=timeout_seconds,
-    )
-    logger.info("crawler.pdf_render_success url=%s output_path=%s", url, output_path)
-    return str(output)
+    try:
+        logger.info("crawler.pdf_render_start url=%s", url)
+        subprocess.run(
+            ["wkhtmltopdf", "--quiet", url, str(tmp_path)],
+            check=True,
+            timeout=timeout_seconds,
+        )
+        blob = tmp_path.read_bytes()
+        logger.info("crawler.pdf_render_success url=%s bytes=%s", url, len(blob))
+        return blob
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            logger.warning("crawler.pdf_renderer_tempfile_cleanup_failed path=%s", tmp_path)
