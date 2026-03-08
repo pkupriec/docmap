@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Callable
 from psycopg import Connection
 
 from services.common.db import get_connection
@@ -8,10 +9,13 @@ from services.geocoder.normalization import normalize_location_name
 
 logger = logging.getLogger(__name__)
 
+NormalizeCallback = Callable[[int, int, int], None]
+
 def normalize_pending_mentions(
     limit: int = 1000,
     *,
     invalid_threshold: int = 5,
+    on_progress: NormalizeCallback | None = None,
 ) -> int:
     logger.info("geocoder.normalize_batch_start batch_size=%s", limit)
     with get_connection() as conn:
@@ -19,6 +23,7 @@ def normalize_pending_mentions(
             conn,
             batch_size=limit,
             invalid_threshold=invalid_threshold,
+            on_progress=on_progress,
         )
     logger.info("geocoder.normalize_batch_done updated=%s", updated)
     return updated
@@ -29,6 +34,7 @@ def _normalize_pending_mentions(
     *,
     batch_size: int,
     invalid_threshold: int,
+    on_progress: NormalizeCallback | None = None,
 ) -> int:
     updated_count = 0
     invalid_count = 0
@@ -75,6 +81,8 @@ def _normalize_pending_mentions(
                 updates.append((new_value, str(mention_id)))
 
         if not updates:
+            if on_progress:
+                on_progress(offset, updated_count, invalid_count)
             continue
 
         with conn.cursor() as cur:
@@ -89,7 +97,11 @@ def _normalize_pending_mentions(
         conn.commit()
         updated_count += len(updates)
         logger.info("geocoder.normalize_applied updates=%s total_updates=%s", len(updates), updated_count)
+        if on_progress:
+            on_progress(offset, updated_count, invalid_count)
 
     if updated_count == 0:
         logger.info("geocoder.normalize_no_changes")
+        if on_progress:
+            on_progress(offset, updated_count, invalid_count)
     return updated_count

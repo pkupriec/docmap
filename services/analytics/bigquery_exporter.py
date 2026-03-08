@@ -4,6 +4,7 @@ import os
 import logging
 import time
 from typing import Any
+from typing import Callable
 
 from services.common.db import get_connection
 
@@ -14,11 +15,26 @@ PRIMARY_KEYS: dict[str, list[str]] = {
 }
 logger = logging.getLogger(__name__)
 
+ExportTableCallback = Callable[[str, str, str | None], None]
 
-def export_all_bi_tables(mode: str = "full") -> None:
+
+def export_all_bi_tables(
+    mode: str = "full",
+    *,
+    on_table: ExportTableCallback | None = None,
+) -> None:
     logger.info("analytics.bigquery_export_all_start mode=%s", mode)
     for table_name in ("bi_documents", "bi_locations", "bi_document_locations"):
-        export_table_to_bigquery(table_name, mode=mode)
+        if on_table:
+            on_table(table_name, "started", None)
+        try:
+            export_table_to_bigquery(table_name, mode=mode)
+            if on_table:
+                on_table(table_name, "succeeded", None)
+        except Exception as exc:
+            if on_table:
+                on_table(table_name, "failed", str(exc))
+            raise
     logger.info("analytics.bigquery_export_all_done mode=%s", mode)
 
 

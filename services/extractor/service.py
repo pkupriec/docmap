@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 from services.common.db import get_connection
 from services.extractor.ollama_client import run_extraction
@@ -25,6 +26,9 @@ class ExtractionResult:
     snapshot_id: str
     run_id: str
     mentions_count: int
+
+
+SnapshotCallback = Callable[[int, int, int, str, ExtractionResult | None, str | None], None]
 
 
 def process_snapshot(
@@ -74,13 +78,16 @@ def process_pending_snapshots(
     prompt_version: str = "v1",
     pipeline_version: str = "v1",
     max_retries: int = 3,
+    on_snapshot: SnapshotCallback | None = None,
 ) -> list[ExtractionResult]:
     with get_connection() as conn:
         snapshot_ids = get_unprocessed_snapshot_ids(conn, limit=limit)
 
     logger.info("extractor.batch_start snapshots=%s limit=%s", len(snapshot_ids), limit)
     results: list[ExtractionResult] = []
-    for snapshot_id in snapshot_ids:
+    failed = 0
+    total = len(snapshot_ids)
+    for idx, snapshot_id in enumerate(snapshot_ids, start=1):
         try:
             result = process_snapshot(
                 snapshot_id,
@@ -90,9 +97,14 @@ def process_pending_snapshots(
                 max_retries=max_retries,
             )
             results.append(result)
+            if on_snapshot:
+                on_snapshot(idx, total, len(results), snapshot_id, result, None)
         except Exception:
+            failed += 1
             logger.exception("extractor.snapshot_failed snapshot_id=%s", snapshot_id)
-    logger.info("extractor.batch_done succeeded=%s failed=%s", len(results), len(snapshot_ids) - len(results))
+            if on_snapshot:
+                on_snapshot(idx, total, len(results), snapshot_id, None, "snapshot_failed")
+    logger.info("extractor.batch_done succeeded=%s failed=%s", len(results), failed)
     return results
 
 

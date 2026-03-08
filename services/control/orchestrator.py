@@ -377,80 +377,287 @@ class ControlOrchestrator:
             return
 
         if stage == "extract":
-            extracted = process_pending_snapshots(limit=1000)
+            total_snapshots = 0
+            succeeded = 0
+            failed = 0
+
+            def on_extract_snapshot(
+                processed: int,
+                total: int,
+                succeeded_count: int,
+                snapshot_id: str,
+                _result: Any,
+                error: str | None,
+            ) -> None:
+                nonlocal total_snapshots, succeeded, failed
+                total_snapshots = total
+                succeeded = succeeded_count
+                failed = max(0, processed - succeeded_count)
+                self.repository.upsert_progress(
+                    run_id,
+                    stage,
+                    current_index=processed,
+                    total_items=total,
+                    items_completed=succeeded,
+                    items_failed=failed,
+                    current_item_label=snapshot_id,
+                    message=f"extract {processed}/{total}",
+                )
+                self.repository.set_stage_status(
+                    run_id,
+                    stage,
+                    "running",
+                    items_total=total,
+                    items_completed=succeeded,
+                    items_failed=failed,
+                )
+                if error:
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "extractor",
+                        "ERROR",
+                        f"Failed {processed}/{total}: snapshot {snapshot_id}",
+                        event_type="progress",
+                        current_index=processed,
+                    )
+                elif processed == 1 or processed % 2 == 0 or processed == total:
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "extractor",
+                        "INFO",
+                        f"Processed {processed}/{total}: snapshot {snapshot_id}",
+                        event_type="progress",
+                        current_index=processed,
+                    )
+
+            extracted = process_pending_snapshots(limit=1000, on_snapshot=on_extract_snapshot)
             completed = len(extracted)
+            if total_snapshots == 0:
+                total_snapshots = completed
             self.repository.upsert_progress(
                 run_id,
                 stage,
-                current_index=completed,
-                total_items=completed,
+                current_index=completed + failed,
+                total_items=total_snapshots,
                 items_completed=completed,
-                items_failed=0,
+                items_failed=failed,
                 message="extract stage completed",
             )
             self.repository.set_stage_status(
                 run_id,
                 stage,
                 "running",
-                items_total=completed,
+                items_total=total_snapshots,
                 items_completed=completed,
-                items_failed=0,
+                items_failed=failed,
             )
             return
 
         if stage == "geocode":
-            normalized = normalize_pending_mentions(limit=5000)
-            geo_result = process_pending_mentions(limit=5000)
+            normalized = 0
+            normalized_scanned = 0
+
+            def on_normalize_progress(processed: int, updated: int, invalid: int) -> None:
+                nonlocal normalized, normalized_scanned
+                normalized = updated
+                normalized_scanned = processed
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "geocoder",
+                    "INFO",
+                    f"normalize scanned={processed} updated={updated} invalid={invalid}",
+                    event_type="progress",
+                    current_index=processed,
+                )
+
+            normalized = normalize_pending_mentions(limit=5000, on_progress=on_normalize_progress)
+            geocode_processed = 0
+            geocode_total = 0
+            geocode_linked = 0
+            geocode_unresolved = 0
+
+            def on_geocode_mention(
+                processed: int,
+                total: int,
+                geocoded_count: int,
+                linked_count: int,
+                mention: Any,
+                status: str | None,
+                error: str | None,
+            ) -> None:
+                nonlocal geocode_processed, geocode_total, geocode_linked, geocode_unresolved
+                geocode_processed = processed
+                geocode_total = total
+                geocode_linked = linked_count
+                geocode_unresolved = max(0, processed - linked_count)
+                self.repository.upsert_progress(
+                    run_id,
+                    stage,
+                    current_index=processed,
+                    total_items=total,
+                    items_completed=linked_count,
+                    items_failed=geocode_unresolved,
+                    current_item_label=getattr(mention, "normalized_location", None),
+                    message=f"geocode {processed}/{total}, normalized={normalized}",
+                )
+                self.repository.set_stage_status(
+                    run_id,
+                    stage,
+                    "running",
+                    items_total=total,
+                    items_completed=linked_count,
+                    items_failed=geocode_unresolved,
+                )
+                if error:
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "geocoder",
+                        "ERROR",
+                        f"Failed {processed}/{total}: {getattr(mention, 'normalized_location', 'unknown')}",
+                        event_type="progress",
+                        current_index=processed,
+                    )
+                elif processed == 1 or processed % 10 == 0 or processed == total:
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "geocoder",
+                        "INFO",
+                        (
+                            f"Processed {processed}/{total}: {getattr(mention, 'normalized_location', 'unknown')} "
+                            f"status={status} geocoded={geocoded_count} linked={linked_count}"
+                        ),
+                        event_type="progress",
+                        current_index=processed,
+                    )
+
+            geo_result = process_pending_mentions(limit=5000, on_mention=on_geocode_mention)
+            if geocode_total == 0:
+                geocode_total = geo_result.processed
+            if geocode_processed == 0:
+                geocode_processed = geo_result.processed
+                geocode_linked = geo_result.linked
+                geocode_unresolved = geo_result.unresolved
             self.repository.upsert_progress(
                 run_id,
                 stage,
-                current_index=geo_result.processed,
-                total_items=geo_result.processed,
-                items_completed=geo_result.linked,
-                items_failed=geo_result.unresolved,
-                message=f"geocode stage completed, normalized={normalized}",
+                current_index=geocode_processed,
+                total_items=geocode_total,
+                items_completed=geocode_linked,
+                items_failed=geocode_unresolved,
+                message=f"geocode stage completed, normalized={normalized}, scanned={normalized_scanned}",
             )
             self.repository.set_stage_status(
                 run_id,
                 stage,
                 "running",
-                items_total=geo_result.processed,
-                items_completed=geo_result.linked,
-                items_failed=geo_result.unresolved,
+                items_total=geocode_total,
+                items_completed=geocode_linked,
+                items_failed=geocode_unresolved,
             )
             return
 
         if stage == "analytics":
-            stats = rebuild_analytics()
+            processed = 0
+
+            def on_analytics_step(table_name: str, rows: int) -> None:
+                nonlocal processed
+                processed += 1
+                self.repository.upsert_progress(
+                    run_id,
+                    stage,
+                    current_index=processed,
+                    total_items=3,
+                    items_completed=processed,
+                    items_failed=0,
+                    current_item_label=table_name,
+                    message=f"analytics {processed}/3",
+                )
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "analytics",
+                    "INFO",
+                    f"rebuilt {table_name}, rows={rows}",
+                    event_type="progress",
+                    current_index=processed,
+                )
+
+            stats = rebuild_analytics(on_step=on_analytics_step)
             total = sum(stats.values())
             self.repository.upsert_progress(
                 run_id,
                 stage,
-                current_index=total,
-                total_items=total,
-                items_completed=total,
+                current_index=processed,
+                total_items=3,
+                items_completed=processed,
                 items_failed=0,
-                message="analytics stage completed",
+                message=f"analytics stage completed, rows={total}",
             )
             self.repository.set_stage_status(
                 run_id,
                 stage,
                 "running",
-                items_total=total,
-                items_completed=total,
+                items_total=3,
+                items_completed=processed,
                 items_failed=0,
             )
             return
 
         if stage == "export":
-            export_all_bi_tables(mode="incremental")
+            processed = 0
+            failed = 0
+
+            def on_export_table(table_name: str, status: str, error: str | None) -> None:
+                nonlocal processed, failed
+                if status == "succeeded":
+                    processed += 1
+                if status == "failed":
+                    failed += 1
+                level = "INFO" if status in ("started", "succeeded") else "ERROR"
+                msg = f"export {table_name}: {status}"
+                if error:
+                    msg = f"{msg} ({error})"
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "export",
+                    level,
+                    msg,
+                    event_type="progress",
+                    current_index=processed + failed,
+                )
+                self.repository.upsert_progress(
+                    run_id,
+                    stage,
+                    current_index=processed + failed,
+                    total_items=3,
+                    items_completed=processed,
+                    items_failed=failed,
+                    current_item_label=table_name,
+                    message=f"export {processed + failed}/3",
+                )
+                self.repository.set_stage_status(
+                    run_id,
+                    stage,
+                    "running",
+                    items_total=3,
+                    items_completed=processed,
+                    items_failed=failed,
+                )
+
+            export_all_bi_tables(mode="incremental", on_table=on_export_table)
             self.repository.upsert_progress(
                 run_id,
                 stage,
-                current_index=3,
+                current_index=processed + failed,
                 total_items=3,
-                items_completed=3,
-                items_failed=0,
+                items_completed=processed,
+                items_failed=failed,
                 message="export stage completed",
             )
             self.repository.set_stage_status(
@@ -458,8 +665,8 @@ class ControlOrchestrator:
                 stage,
                 "running",
                 items_total=3,
-                items_completed=3,
-                items_failed=0,
+                items_completed=processed,
+                items_failed=failed,
             )
             return
 

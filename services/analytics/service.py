@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 from psycopg import Connection
 
 from services.common.db import get_connection
 
 logger = logging.getLogger(__name__)
+
+AnalyticsStepCallback = Callable[[str, int], None]
 
 def build_bi_documents(conn: Connection) -> int:
     with conn.cursor() as cur:
@@ -89,12 +92,18 @@ def build_bi_document_locations(conn: Connection) -> int:
         return cur.rowcount
 
 
-def rebuild_analytics() -> dict[str, int]:
+def rebuild_analytics(*, on_step: AnalyticsStepCallback | None = None) -> dict[str, int]:
     logger.info("analytics.rebuild_start")
     with get_connection() as conn:
         documents_rows = build_bi_documents(conn)
+        if on_step:
+            on_step("bi_documents", documents_rows)
         locations_rows = build_bi_locations(conn)
+        if on_step:
+            on_step("bi_locations", locations_rows)
         links_rows = build_bi_document_locations(conn)
+        if on_step:
+            on_step("bi_document_locations", links_rows)
         conn.commit()
 
     stats = {

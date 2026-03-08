@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Callable
 
 from services.common.db import get_connection
 from services.geocoder.nominatim_client import geocode_location
@@ -25,7 +26,14 @@ class GeocodeBatchResult:
     unresolved: int
 
 
-def process_pending_mentions(limit: int = 1000) -> GeocodeBatchResult:
+MentionCallback = Callable[[int, int, int, int, PendingMention, str | None, str | None], None]
+
+
+def process_pending_mentions(
+    limit: int = 1000,
+    *,
+    on_mention: MentionCallback | None = None,
+) -> GeocodeBatchResult:
     logger.info("geocoder.batch_start limit=%s", limit)
     with get_connection() as conn:
         pending = get_pending_mentions(conn, limit=limit)
@@ -33,7 +41,8 @@ def process_pending_mentions(limit: int = 1000) -> GeocodeBatchResult:
         linked = 0
         unresolved = 0
 
-        for mention in pending:
+        total = len(pending)
+        for idx, mention in enumerate(pending, start=1):
             try:
                 status = _process_single_mention(conn, mention)
                 if status == "linked":
@@ -43,6 +52,8 @@ def process_pending_mentions(limit: int = 1000) -> GeocodeBatchResult:
                     linked += 1
                 else:
                     unresolved += 1
+                if on_mention:
+                    on_mention(idx, total, geocoded, linked, mention, status, None)
             except Exception:
                 unresolved += 1
                 logger.exception(
@@ -50,6 +61,8 @@ def process_pending_mentions(limit: int = 1000) -> GeocodeBatchResult:
                     mention.mention_id,
                     mention.normalized_location,
                 )
+                if on_mention:
+                    on_mention(idx, total, geocoded, linked, mention, None, "mention_failed")
 
         conn.commit()
 
