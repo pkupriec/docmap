@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import logging
 from dataclasses import dataclass
 
 from psycopg import Connection
@@ -8,6 +9,7 @@ from psycopg import Connection
 from services.crawler.snapshot import should_create_snapshot
 
 SCP_URL_PATTERN = re.compile(r"/scp-(\d+)$")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -50,11 +52,12 @@ def get_or_create_document(
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO documents (scp_object_id, url, title)
-            VALUES (%s, %s, %s)
+            INSERT INTO documents (scp_object_id, url, title, last_checked_at)
+            VALUES (%s, %s, %s, now())
             ON CONFLICT (url) DO UPDATE
             SET title = COALESCE(EXCLUDED.title, documents.title),
-                scp_object_id = COALESCE(documents.scp_object_id, EXCLUDED.scp_object_id)
+                scp_object_id = COALESCE(documents.scp_object_id, EXCLUDED.scp_object_id),
+                last_checked_at = now()
             RETURNING id
             """,
             (scp_object_id, url, title),
@@ -93,6 +96,7 @@ def save_snapshot_if_changed(
     previous_text = latest.clean_text if latest else None
     create = should_create_snapshot(clean_text, previous_text, resnapshot=resnapshot)
     if not create:
+        logger.info("crawler.snapshot_unchanged document_id=%s", document_id)
         return (None, False)
 
     with conn.cursor() as cur:
@@ -105,4 +109,5 @@ def save_snapshot_if_changed(
             (document_id, raw_html, clean_text, pdf_path),
         )
         snapshot_id = str(cur.fetchone()[0])
+        logger.info("crawler.snapshot_saved document_id=%s snapshot_id=%s", document_id, snapshot_id)
         return (snapshot_id, True)

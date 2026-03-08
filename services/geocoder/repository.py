@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from psycopg import Connection
 
+logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PendingMention:
@@ -31,7 +33,7 @@ def get_pending_mentions(conn: Connection, *, limit: int = 1000) -> list[Pending
             (limit,),
         )
         rows = cur.fetchall()
-    return [
+    mentions = [
         PendingMention(
             mention_id=str(row[0]),
             document_id=str(row[1]),
@@ -39,6 +41,8 @@ def get_pending_mentions(conn: Connection, *, limit: int = 1000) -> list[Pending
         )
         for row in rows
     ]
+    logger.info("geocoder.pending_mentions_loaded count=%s limit=%s", len(mentions), limit)
+    return mentions
 
 
 def get_geo_location_id_by_normalized_name(conn: Connection, normalized_location: str) -> str | None:
@@ -92,6 +96,7 @@ def link_document_location(conn: Connection, *, document_id: str, location_id: s
         )
         existing = cur.fetchone()
         if existing:
+            logger.info("geocoder.document_location_already_linked mention_id=%s", mention_id)
             return str(existing[0])
 
         cur.execute(

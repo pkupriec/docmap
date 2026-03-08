@@ -150,6 +150,7 @@ Phase 5 — geocoding
 Phase 6 — analytics  
 Phase 7 — BigQuery export  
 Phase 8 — scheduler  
+Phase 9 — pipeline hardening  
 
 Do not implement everything at once.
 

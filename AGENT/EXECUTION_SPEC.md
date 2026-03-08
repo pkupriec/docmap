@@ -136,6 +136,7 @@ phase5_geocoding
 phase6_analytics
 phase7_bigquery
 phase8_scheduler
+phase9_pipeline_hardening
 
 
 The agent must execute phases sequentially.
@@ -154,6 +155,15 @@ The agent must follow these rules:
 4. Use structured logging.
 5. Handle errors gracefully.
 6. Avoid breaking database contracts.
+7. Treat documented architectural decisions as fixed unless the user explicitly reopens them.
+
+Reasoning policy:
+
+- use reasoning conservatively and adjust it to task complexity
+- prefer `low` for small local or mechanical changes
+- prefer `medium` by default for normal implementation work in this repository
+- use `high` only for tasks with high coupling, tricky invariants, schema-impacting changes, orchestration logic, or high regression risk
+- once the implementation path is clear, reduce reasoning level rather than keeping it unnecessarily high
 
 ---
 
@@ -250,6 +260,12 @@ Geocoding failure → mark unresolved.
 
 Export failure → retry export only.
 
+Exception:
+
+- fatal infrastructure failures must stop the run after preserving already committed progress
+- external dependency outages that require operator intervention must stop the run
+- item-level failures inside an otherwise healthy stage should still be isolated and logged
+
 ---
 
 # Incremental Processing
@@ -267,6 +283,35 @@ retry BigQuery export
 
 These capabilities are part of the architecture.
 
+Incremental corpus refresh contract:
+
+- weekly incremental refresh uses the full canonical range `SCP-001` through `SCP-7999`
+- missing canonical documents must be inserted automatically when first encountered
+- the system must record document refresh checks even when content is unchanged
+- only newly created snapshots are extracted during normal incremental runs
+- incremental crawl may still fetch documents to determine whether they changed
+
+Pipeline mode contract:
+
+- `run_full_pipeline()` means a full pass over the canonical corpus
+- scheduler continues to run only `incremental`
+- no resumable/checkpointed run-state is required in the first implementation
+
+Normalization contract:
+
+- keep normalization as an in-place update of `location_mentions.normalized_location`
+- do not add normalization-specific state/version columns unless strictly required to fix a real logical defect
+- support full renormalization when normalization rules change
+- invalid normalization results must be logged and must not overwrite the previous value
+- repeated invalid normalization results in one run should stop the normalization process
+
+Crawler hardening contract:
+
+- prefer improving existing extraction heuristics over introducing browser automation
+- operate only on content available in the fetched page
+- do not require canonical crawler fixtures in the current phase
+- when text quality looks weak, log a warning and continue
+
 ---
 
 # Logging
@@ -282,13 +327,22 @@ operation
 target
 status
 error
+run_id
+
+Required summary fields for each stage and full pipeline run:
+
+processed
+succeeded
+failed
+skipped
+duration_seconds
 
 
 ---
 
 # Testing Expectations
 
-Tests must exist for:
+Tests should exist where they materially improve confidence, especially for:
 
 
 crawler
@@ -297,10 +351,18 @@ geocoder responses
 database queries
 
 
-Tests must be placed in:
+When tests are written, they should be placed in:
 
 
 tests/
+
+Test policy:
+
+- tests are primarily a self-check mechanism for the implementation agent
+- the agent may choose unit tests, integration tests, or no new tests based on the risk and scope of the change
+- verification is still required even when no new tests are added
+- the agent should explicitly report what verification was performed
+- if an existing test covers logic that is being changed, the agent should update that test to match the new intended behavior
 
 
 ---
@@ -313,7 +375,7 @@ A development phase is complete when:
 2. Code builds successfully.
 3. Docker services start.
 4. Basic functionality works.
-5. Tests pass.
+5. Verification appropriate to the change has been performed; when tests are used, they pass.
 
 Only then may the agent proceed to the next phase.
 
@@ -340,3 +402,8 @@ Before autonomous implementation begins, the agent must verify:
 - `AGENT/AUTONOMY_CHECKLIST.md`
 
 If any checklist gate fails, the agent must patch specs first and only then continue phase execution.
+
+Implementation stance:
+
+- prefer deciding "how to implement" rather than "what to build" when the architecture and task files already answer the latter
+- if the docs are explicit, implement them directly instead of re-deriving product or architecture choices

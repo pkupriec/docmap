@@ -9,6 +9,7 @@ import uuid
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from services.common.logging import configure_logging
 from services.pipeline.service import run_incremental_pipeline
 
 
@@ -52,6 +53,7 @@ def run_scheduled_incremental_job(max_retries: int = 2) -> None:
 
 
 def start_scheduler() -> None:
+    configure_logging()
     cron_expr = os.getenv("SCHEDULER_CRON", "0 3 * * 1")
     timezone = os.getenv("SCHEDULER_TIMEZONE", "UTC")
     max_retries = int(os.getenv("SCHEDULER_MAX_RETRIES", "2"))

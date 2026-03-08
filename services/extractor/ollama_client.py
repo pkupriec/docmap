@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import logging
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 def run_extraction(
@@ -13,6 +16,7 @@ def run_extraction(
 ) -> str:
     ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
     endpoint = f"{ollama_host}/api/generate"
+    logger.info("extractor.ollama_request_start model=%s endpoint=%s", model, endpoint)
 
     response = requests.post(
         endpoint,
@@ -27,5 +31,7 @@ def run_extraction(
     payload = response.json()
     output = payload.get("response")
     if not isinstance(output, str):
+        logger.error("extractor.ollama_invalid_response model=%s", model)
         raise RuntimeError("Invalid Ollama response: missing string 'response'")
+    logger.info("extractor.ollama_request_success model=%s chars=%s", model, len(output))
     return output

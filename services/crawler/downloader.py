@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import random
 import time
+import logging
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 class RequestThrottler:
@@ -35,15 +38,31 @@ def download_page(
     for attempt in range(1, max_retries + 1):
         if throttler is not None:
             throttler.wait()
+        logger.info("crawler.download_attempt url=%s attempt=%s", url, attempt)
         try:
             response = requests.get(url, headers=headers, timeout=timeout_seconds)
             response.raise_for_status()
+            logger.info(
+                "crawler.download_success url=%s attempt=%s status_code=%s bytes=%s",
+                url,
+                attempt,
+                response.status_code,
+                len(response.text),
+            )
             return response.text
         except requests.RequestException as exc:
             last_error = exc
             if attempt == max_retries:
                 break
             backoff_seconds = 2 ** (attempt - 1)
+            logger.warning(
+                "crawler.download_retry url=%s attempt=%s backoff_seconds=%s reason=%s",
+                url,
+                attempt,
+                backoff_seconds,
+                type(exc).__name__,
+            )
             time.sleep(backoff_seconds)
 
+    logger.error("crawler.download_failed url=%s max_retries=%s", url, max_retries)
     raise RuntimeError(f"Failed to download {url}") from last_error

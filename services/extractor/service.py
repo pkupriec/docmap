@@ -35,6 +35,7 @@ def process_snapshot(
     pipeline_version: str = "v1",
     max_retries: int = 3,
 ) -> ExtractionResult:
+    logger.info("extractor.snapshot_start snapshot_id=%s model=%s", snapshot_id, model)
     with get_connection() as conn:
         clean_text = get_snapshot_clean_text(conn, snapshot_id)
         if not clean_text:
@@ -77,6 +78,7 @@ def process_pending_snapshots(
     with get_connection() as conn:
         snapshot_ids = get_unprocessed_snapshot_ids(conn, limit=limit)
 
+    logger.info("extractor.batch_start snapshots=%s limit=%s", len(snapshot_ids), limit)
     results: list[ExtractionResult] = []
     for snapshot_id in snapshot_ids:
         try:
@@ -90,6 +92,7 @@ def process_pending_snapshots(
             results.append(result)
         except Exception:
             logger.exception("extractor.snapshot_failed snapshot_id=%s", snapshot_id)
+    logger.info("extractor.batch_done succeeded=%s failed=%s", len(results), len(snapshot_ids) - len(results))
     return results
 
 
@@ -107,4 +110,5 @@ def _extract_with_retries(*, model: str, prompt: str, max_retries: int):
             backoff_seconds = 2 ** (attempt - 1)
             logger.warning("extractor.retry attempt=%s reason=%s", attempt, type(exc).__name__)
             time.sleep(backoff_seconds)
+    logger.error("extractor.retries_exhausted model=%s max_retries=%s", model, max_retries)
     raise RuntimeError("Extraction failed after retries") from last_error

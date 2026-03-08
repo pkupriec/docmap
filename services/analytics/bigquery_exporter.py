@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import logging
+import time
 from typing import Any
 
 from services.common.db import get_connection
@@ -10,26 +12,56 @@ PRIMARY_KEYS: dict[str, list[str]] = {
     "bi_locations": ["location_id"],
     "bi_document_locations": ["document_id", "location_id"],
 }
+logger = logging.getLogger(__name__)
 
 
 def export_all_bi_tables(mode: str = "full") -> None:
+    logger.info("analytics.bigquery_export_all_start mode=%s", mode)
     for table_name in ("bi_documents", "bi_locations", "bi_document_locations"):
         export_table_to_bigquery(table_name, mode=mode)
+    logger.info("analytics.bigquery_export_all_done mode=%s", mode)
 
 
 def export_table_to_bigquery(table_name: str, *, mode: str = "full") -> None:
+    logger.info("analytics.bigquery_export_start table=%s mode=%s", table_name, mode)
+    max_retries = 2
+    last_error: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            _export_table_to_bigquery_once(table_name, mode=mode)
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt == max_retries:
+                break
+            backoff_seconds = 2 ** (attempt - 1)
+            logger.warning(
+                "analytics.bigquery_export_retry table=%s mode=%s attempt=%s backoff_seconds=%s reason=%s",
+                table_name,
+                mode,
+                attempt,
+                backoff_seconds,
+                type(exc).__name__,
+            )
+            time.sleep(backoff_seconds)
+
+    logger.error("analytics.bigquery_export_failed table=%s mode=%s", table_name, mode)
+    raise RuntimeError(f"BigQuery export failed for table: {table_name}") from last_error
+
+
+def _export_table_to_bigquery_once(table_name: str, *, mode: str) -> None:
     client = get_bigquery_client()
     project_id = _required_env("GCP_PROJECT_ID")
     dataset = os.getenv("BIGQUERY_DATASET", "docmap_mvp")
     location = os.getenv("BIGQUERY_LOCATION", "US")
-
     rows = _fetch_postgres_rows(table_name)
     table_id = f"{project_id}.{dataset}.{table_name}"
-
     _ensure_dataset(client, project_id, dataset, location)
 
     if mode == "full":
         _load_rows(client, table_id, rows, write_disposition="WRITE_TRUNCATE", location=location)
+        logger.info("analytics.bigquery_export_done table=%s mode=%s rows=%s", table_name, mode, len(rows))
         return
 
     if mode != "incremental":
@@ -39,6 +71,7 @@ def export_table_to_bigquery(table_name: str, *, mode: str = "full") -> None:
     _load_rows(client, staging_table, rows, write_disposition="WRITE_TRUNCATE", location=location)
     _ensure_target_table(client, table_id, staging_table)
     _merge_from_staging(client, table_id, staging_table, table_name, location=location)
+    logger.info("analytics.bigquery_export_done table=%s mode=%s rows=%s", table_name, mode, len(rows))
 
 
 def get_bigquery_client():

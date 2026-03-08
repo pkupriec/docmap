@@ -19,6 +19,7 @@ CREATE TABLE documents (
     scp_object_id UUID REFERENCES scp_objects(id),
     url TEXT NOT NULL UNIQUE,
     title TEXT,
+    last_checked_at TIMESTAMP DEFAULT now(),
     created_at TIMESTAMP DEFAULT now()
 );
 

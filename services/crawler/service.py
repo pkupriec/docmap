@@ -44,6 +44,7 @@ def process_document(
     resnapshot: bool = False,
     throttler: RequestThrottler | None = None,
 ) -> CrawlResult:
+    logger.info("crawler.document_start url=%s resnapshot=%s", url, resnapshot)
     raw_html = download_page(url, throttler=throttler)
     clean_text = extract_clean_text(raw_html)
     title = extract_title(raw_html)
@@ -100,6 +101,7 @@ def process_documents(
     pdf_dir: str = "snapshots",
     resnapshot: bool = False,
 ) -> BatchCrawlResult:
+    logger.info("crawler.batch_start urls=%s resnapshot=%s", len(urls), resnapshot)
     throttler = RequestThrottler()
     results: list[CrawlResult] = []
     failed_urls: list[str] = []
@@ -117,13 +119,20 @@ def process_documents(
             logger.exception("crawler.process_failed url=%s", url)
             failed_urls.append(url)
 
-    return BatchCrawlResult(
+    result = BatchCrawlResult(
         processed=len(urls),
         succeeded=len(results),
         failed=len(failed_urls),
         results=results,
         failed_urls=failed_urls,
     )
+    logger.info(
+        "crawler.batch_done processed=%s succeeded=%s failed=%s",
+        result.processed,
+        result.succeeded,
+        result.failed,
+    )
+    return result
 
 
 def _build_pdf_path(url: str, pdf_dir: str) -> str:

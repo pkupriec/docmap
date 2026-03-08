@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from psycopg import Connection
 
 from services.common.db import get_connection
 
+logger = logging.getLogger(__name__)
 
 def build_bi_documents(conn: Connection) -> int:
     with conn.cursor() as cur:
@@ -87,14 +90,17 @@ def build_bi_document_locations(conn: Connection) -> int:
 
 
 def rebuild_analytics() -> dict[str, int]:
+    logger.info("analytics.rebuild_start")
     with get_connection() as conn:
         documents_rows = build_bi_documents(conn)
         locations_rows = build_bi_locations(conn)
         links_rows = build_bi_document_locations(conn)
         conn.commit()
 
-    return {
+    stats = {
         "bi_documents": documents_rows,
         "bi_locations": locations_rows,
         "bi_document_locations": links_rows,
     }
+    logger.info("analytics.rebuild_done stats=%s", stats)
+    return stats

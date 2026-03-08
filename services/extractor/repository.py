@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from psycopg import Connection
 
 from services.extractor.models import ExtractionPayload
 
+logger = logging.getLogger(__name__)
 
 def get_snapshot_clean_text(conn: Connection, snapshot_id: str) -> str | None:
     with conn.cursor() as cur:
@@ -28,7 +31,9 @@ def get_unprocessed_snapshot_ids(conn: Connection, limit: int = 100) -> list[str
             """,
             (limit,),
         )
-        return [str(row[0]) for row in cur.fetchall()]
+        snapshot_ids = [str(row[0]) for row in cur.fetchall()]
+    logger.info("extractor.pending_snapshots_loaded count=%s limit=%s", len(snapshot_ids), limit)
+    return snapshot_ids
 
 
 def save_extraction_run(
@@ -53,6 +58,7 @@ def save_extraction_run(
 
 def save_location_mentions(conn: Connection, *, run_id: str, payload: ExtractionPayload) -> int:
     if not payload.locations:
+        logger.info("extractor.mentions_empty run_id=%s", run_id)
         return 0
 
     rows = [
@@ -77,4 +83,5 @@ def save_location_mentions(conn: Connection, *, run_id: str, payload: Extraction
             """,
             rows,
         )
+    logger.info("extractor.mentions_saved run_id=%s count=%s", run_id, len(rows))
     return len(rows)

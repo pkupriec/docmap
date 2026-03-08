@@ -18,6 +18,7 @@ def extract_clean_text(raw_html: str) -> str:
         "script",
         "style",
         "noscript",
+        "iframe",
         "nav",
         "aside",
         "footer",
@@ -26,6 +27,9 @@ def extract_clean_text(raw_html: str) -> str:
         ".creditRate",
         ".rate-box-with-credit-button",
         ".page-tags",
+        ".licensebox",
+        ".footer-wikiwalk-nav",
+        ".pager",
         "#side-bar",
     ]:
         for tag in soup.select(selector):

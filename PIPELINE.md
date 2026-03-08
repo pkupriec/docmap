@@ -1,6 +1,7 @@
 # Processing Pipeline
 
 This document defines the execution model for DocMap.
+Its purpose is to make pipeline behavior explicit enough that the implementation agent mainly decides implementation details, not pipeline architecture.
 
 ## Goal
 
@@ -85,6 +86,7 @@ Writes:
 Failure behavior:
 - retry malformed JSON and transient transport errors
 - preserve snapshot for later rerun
+- stop the run if the extraction service itself is unavailable and requires operator intervention
 
 ### 4) Geocoding
 
@@ -103,6 +105,9 @@ Writes:
 Failure behavior:
 - unresolved names are logged
 - continue with remaining locations
+- retry transient transport failures up to 3 attempts with exponential backoff
+- invalid geocoder payloads and non-retryable item errors are logged and skipped
+- stop the run if the geocoding service itself is unavailable and requires operator intervention
 
 ### 5) Analytics rebuild
 
@@ -136,6 +141,8 @@ Modes:
 Failure behavior:
 - keep local BI tables intact
 - allow export-only retry
+- retry export per table up to 2 attempts with exponential backoff
+- export must be consistent across all BI tables; if one table export fails, the export stage fails rather than continuing with a partial mixed export state
 
 ## Weekly Incremental Flow
 
@@ -147,6 +154,9 @@ Default schedule (see `TASKS/phase8_scheduler.md`):
 5. rebuild BI tables
 6. export to BigQuery
 
+For the canonical SCP corpus, weekly incremental refresh traverses the full range `SCP-001` through `SCP-7999`.
+Implementation may execute this in one pass or in simpler deterministic batches.
+
 ## Partial Rerun Requirements
 
 The pipeline must support:
@@ -155,6 +165,33 @@ The pipeline must support:
 - geocode-only rerun for unresolved values
 - analytics-only rebuild
 - export-only retry
+
+Incremental refresh rules:
+- revisit canonical documents even when they already exist in `documents`
+- create missing canonical documents automatically when first encountered
+- record document check activity even when content is unchanged
+- only newly created snapshots are extracted during normal incremental runs
+- incremental crawl may still fetch canonical documents to detect change; incrementality applies to downstream persistence and reprocessing, not to skipping verification entirely
+
+Pipeline modes:
+- `single-document`: process one explicitly requested document
+- `incremental`: scheduled/default refresh over the canonical corpus with change detection
+- `full`: full pass over the canonical corpus `SCP-001` through `SCP-7999`
+
+The first implementation does not require resumable/checkpointed run state.
+
+Normalization rules:
+- normalization updates `location_mentions.normalized_location` in place
+- schema should not gain dedicated normalization-state fields unless they are strictly required to fix a real logical defect
+- when normalization rules change, the system must support renormalizing the full relevant corpus
+- invalid normalization outcomes should be logged while preserving the previous value
+- repeated invalid normalization outcomes in one run should stop the process as a likely systemic fault
+
+Crawler quality rules for the current phase:
+- improve text extraction heuristics incrementally rather than introducing a heavier browser-driven crawler
+- operate only on content present in the fetched page
+- if extracted text quality appears weak, log a warning and continue
+- additional hard quality gates can be introduced later after real processed data is available
 
 ## Observability
 
@@ -165,6 +202,16 @@ All stages must emit structured logs with at least:
 - target
 - status
 - error (when present)
+- run_id
+
+Each stage and the overall pipeline must also emit a completion summary with:
+- run_id
+- stage
+- processed
+- succeeded
+- failed
+- skipped
+- duration_seconds
 
 ## Constraints
 
@@ -173,3 +220,5 @@ All stages must emit structured logs with at least:
 - Snapshots are immutable.
 - BI tables are derived and rebuildable.
 - Export failures never force recrawl or re-extraction.
+- Fatal infrastructure failures stop the run after preserving already committed progress.
+- External dependency outages that require operator intervention stop the run rather than degrading silently.

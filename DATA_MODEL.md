@@ -109,6 +109,7 @@ scp_object_id | reference to SCP object |
 url | canonical document URL |
 title | page title |
 created_at | first discovery timestamp |
+last_checked_at | last refresh check timestamp, even if unchanged |
 
 Constraints:
 
@@ -235,6 +236,11 @@ Relationship:
 
 
 extraction_runs 1 → N location_mentions
+
+Normalization note:
+
+`normalized_location` is updated in place by the normalization step.
+No dedicated normalization-state or version columns are required in the current architecture.
 
 
 ---

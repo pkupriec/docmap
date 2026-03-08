@@ -59,6 +59,16 @@ Maximum recommended size:
 
 Split logic into modules.
 
+## Reasoning
+
+Use reasoning effort conservatively.
+
+- low: mechanical edits, straightforward doc sync, small localized changes
+- medium: default for ordinary feature implementation and refactoring
+- high: only for complex orchestration, schema-affecting work, tricky invariants, or high-risk debugging
+
+Do not keep reasoning higher than necessary once the implementation path is clear.
+
 ---
 
 # Logging
@@ -142,13 +152,19 @@ GEOCODER_URL
 
 # Tests
 
-Basic tests should exist for:
+Tests should be used where they materially improve confidence.
+
+Typical useful coverage areas:
 
 crawler  
 extractor  
 geocoder  
 
-Tests should be placed in:
+Tests are primarily an implementation self-check mechanism for the agent.
+The agent may choose unit tests, integration tests, or no new tests depending on the change.
+If an existing test already covers the changed logic, update it together with the implementation.
+
+When tests are written, they should be placed in:
 
 tests/
 

@@ -27,6 +27,7 @@ phase5_geocoding.md
 phase6_analytics.md
 phase7_bigquery.md
 phase8_scheduler.md
+phase9_pipeline_hardening.md
 
 The agent must implement tasks sequentially.
 
@@ -41,6 +42,8 @@ For each phase:
 3. Commit changes incrementally.
 
 The agent must avoid implementing multiple phases at once.
+The agent should treat documented architectural decisions as pre-resolved and focus on implementation details.
+The agent should regulate reasoning conservatively: low for mechanical changes, medium by default, high only for genuinely complex or risky implementation work.
 
 ---
 
@@ -110,18 +113,22 @@ The agent must ensure services start correctly.
 
 # Testing
 
-Each service should include basic tests.
+Each service may include tests where they materially improve confidence.
 
-Tests should verify:
+Tests are primarily for agent self-check and may verify:
 
 crawler downloads pages
 LLM extraction returns valid JSON
 geocoder returns coordinates
 database queries work
 
-Tests should be placed in:
+When tests are written, they should be placed in:
 
 tests/
+
+The implementation agent should choose the verification method based on change risk.
+This may include unit tests, integration tests, runtime validation, or manual reasoning from existing coverage.
+If an existing test already covers the changed logic, the agent should update that test accordingly.
 
 ---
 
@@ -170,6 +177,7 @@ A phase is complete when:
 2. The code builds successfully.
 3. Docker services start correctly.
 4. Basic functionality works.
+5. Verification appropriate to the change has been performed.
 
 Only after completing a phase should the agent proceed to the next phase.
 
@@ -182,3 +190,4 @@ The agent must follow the architecture defined in this repository.
 The agent must not redesign the system without explicit approval.
 
 All major architectural decisions are already documented.
+The agent should not spend effort redesigning decisions that are already fixed in the docs.

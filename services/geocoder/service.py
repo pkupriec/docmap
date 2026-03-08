@@ -26,6 +26,7 @@ class GeocodeBatchResult:
 
 
 def process_pending_mentions(limit: int = 1000) -> GeocodeBatchResult:
+    logger.info("geocoder.batch_start limit=%s", limit)
     with get_connection() as conn:
         pending = get_pending_mentions(conn, limit=limit)
         geocoded = 0
@@ -33,23 +34,39 @@ def process_pending_mentions(limit: int = 1000) -> GeocodeBatchResult:
         unresolved = 0
 
         for mention in pending:
-            status = _process_single_mention(conn, mention)
-            if status == "linked":
-                linked += 1
-            elif status == "geocoded_and_linked":
-                geocoded += 1
-                linked += 1
-            else:
+            try:
+                status = _process_single_mention(conn, mention)
+                if status == "linked":
+                    linked += 1
+                elif status == "geocoded_and_linked":
+                    geocoded += 1
+                    linked += 1
+                else:
+                    unresolved += 1
+            except Exception:
                 unresolved += 1
+                logger.exception(
+                    "geocoder.mention_failed mention_id=%s normalized_location=%s",
+                    mention.mention_id,
+                    mention.normalized_location,
+                )
 
         conn.commit()
 
-    return GeocodeBatchResult(
+    result = GeocodeBatchResult(
         processed=len(pending),
         geocoded=geocoded,
         linked=linked,
         unresolved=unresolved,
     )
+    logger.info(
+        "geocoder.batch_done processed=%s geocoded=%s linked=%s unresolved=%s",
+        result.processed,
+        result.geocoded,
+        result.linked,
+        result.unresolved,
+    )
+    return result
 
 
 def _process_single_mention(conn, mention: PendingMention) -> str:
