@@ -16,3 +16,9 @@ PROJECT.md
 ARCHITECTURE.md
 DATA_MODEL.md
 PIPELINE.md
+
+## Control Plane (Phase 10)
+
+- Backend API: FastAPI app in `main.py` with endpoints under `/api` (see `docs/CONTROL_API.openapi.yaml`).
+- Control schema: `database/control_plane.sql` (mounted in `infra/docker-compose.yml`).
+- Operator UI: React app in `ui/` (Runs List, Run Details, Live Logs).

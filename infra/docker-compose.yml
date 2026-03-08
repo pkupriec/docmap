@@ -16,6 +16,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ../database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ../database/control_plane.sql:/docker-entrypoint-initdb.d/control_plane.sql
       - ../database/seed_scp_objects.sql:/docker-entrypoint-initdb.d/seed_scp_objects.sql
 
   app:
@@ -36,7 +37,22 @@ services:
 
     working_dir: /app
 
-    command: sleep infinity
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+    ports:
+      - "8000:8000"
+
+  control-ui:
+    image: node:20
+    container_name: docmap-control-ui
+    depends_on:
+      - app
+    working_dir: /ui
+    volumes:
+      - ..:/app
+    command: sh -c "cd /app/ui && npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"
 
 volumes:
   postgres_data:
