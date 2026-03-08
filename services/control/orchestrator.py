@@ -247,12 +247,76 @@ class ControlOrchestrator:
                 urls = generate_scp_urls(start, end)
             else:
                 urls = generate_scp_urls(1, 7999)
-            result = process_documents(urls)
+
+            total = len(urls)
+            self.repository.upsert_progress(
+                run_id,
+                stage,
+                current_index=0,
+                total_items=total,
+                items_completed=0,
+                items_failed=0,
+                message=f"crawl started, total={total}",
+            )
+
+            def on_crawl_document(
+                processed: int,
+                succeeded: int,
+                failed: int,
+                url: str,
+                _result: Any,
+                error: str | None,
+            ) -> None:
+                self.repository.upsert_progress(
+                    run_id,
+                    stage,
+                    current_index=processed,
+                    total_items=total,
+                    items_completed=succeeded,
+                    items_failed=failed,
+                    current_document_url=url,
+                    current_item_label=url.rstrip("/").split("/")[-1],
+                    message=f"crawl {processed}/{total}",
+                )
+                self.repository.set_stage_status(
+                    run_id,
+                    stage,
+                    "running",
+                    items_total=total,
+                    items_completed=succeeded,
+                    items_failed=failed,
+                )
+
+                should_log_info = processed == 1 or processed % 2 == 0 or processed == total
+                if error:
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "crawler",
+                        "ERROR",
+                        f"Failed {processed}/{total}: {url}",
+                        event_type="progress",
+                        document_url=url,
+                        current_index=processed,
+                    )
+                elif should_log_info:
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "crawler",
+                        "INFO",
+                        f"Crawled {processed}/{total}: {url}",
+                        event_type="progress",
+                        document_url=url,
+                        current_index=processed,
+                    )
+
+            result = process_documents(urls, on_document=on_crawl_document)
             self.repository.upsert_progress(
                 run_id,
                 stage,
                 current_index=result.processed,
-                total_items=result.processed,
+                total_items=total,
                 items_completed=result.succeeded,
                 items_failed=result.failed,
                 message="crawl stage completed",
@@ -261,7 +325,7 @@ class ControlOrchestrator:
                 run_id,
                 stage,
                 "running",
-                items_total=result.processed,
+                items_total=total,
                 items_completed=result.succeeded,
                 items_failed=result.failed,
             )

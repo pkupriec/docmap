@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "DocMap Postgres",
+      "Group": "DocMap",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "docmap",
+      "Username": "docmap",
+      "SSLMode": "prefer"
+    }
+  }
+}

@@ -57,7 +57,17 @@ def _remove_probable_ui_noise(root: Tag) -> None:
     )
 
     for tag in list(root.find_all(True)):
-        classes = " ".join(tag.get("class", [])).lower()
-        element_id = (tag.get("id") or "").lower()
+        attrs = tag.attrs if isinstance(tag.attrs, dict) else {}
+
+        class_attr = attrs.get("class", [])
+        if isinstance(class_attr, str):
+            class_names = [class_attr]
+        elif isinstance(class_attr, (list, tuple)):
+            class_names = [str(item) for item in class_attr if item]
+        else:
+            class_names = []
+
+        classes = " ".join(class_names).lower()
+        element_id = str(attrs.get("id") or "").lower()
         if any(keyword in classes or keyword in element_id for keyword in keywords):
             tag.decompose()

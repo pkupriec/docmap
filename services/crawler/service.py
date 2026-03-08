@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from services.common.db import get_connection
 from services.crawler.downloader import RequestThrottler, download_page
@@ -13,6 +14,7 @@ from services.crawler.repository import (
     canonical_number_from_url,
     get_or_create_document,
     get_or_create_scp_object,
+    set_snapshot_pdf_path,
     save_snapshot_if_changed,
 )
 
@@ -35,6 +37,9 @@ class BatchCrawlResult:
     failed: int
     results: list[CrawlResult]
     failed_urls: list[str]
+
+
+DocumentCallback = Callable[[int, int, int, str, CrawlResult | None, str | None], None]
 
 
 def process_document(
@@ -75,12 +80,22 @@ def process_document(
             document_id=document_id,
             raw_html=raw_html,
             clean_text=clean_text,
-            pdf_path=pdf_path,
+            pdf_path=None,
             resnapshot=resnapshot,
         )
 
         if created:
-            render_pdf(url, pdf_path)
+            try:
+                render_pdf(url, pdf_path)
+                if snapshot_id:
+                    set_snapshot_pdf_path(conn, snapshot_id, pdf_path)
+            except Exception as exc:
+                logger.warning(
+                    "crawler.pdf_render_failed_nonfatal url=%s output_path=%s error=%s",
+                    url,
+                    pdf_path,
+                    exc,
+                )
             conn.commit()
             logger.info("crawler.snapshot_created url=%s snapshot_id=%s", url, snapshot_id)
         else:
@@ -100,13 +115,14 @@ def process_documents(
     *,
     pdf_dir: str = "snapshots",
     resnapshot: bool = False,
+    on_document: DocumentCallback | None = None,
 ) -> BatchCrawlResult:
     logger.info("crawler.batch_start urls=%s resnapshot=%s", len(urls), resnapshot)
     throttler = RequestThrottler()
     results: list[CrawlResult] = []
     failed_urls: list[str] = []
 
-    for url in urls:
+    for idx, url in enumerate(urls, start=1):
         try:
             result = process_document(
                 url,
@@ -115,9 +131,13 @@ def process_documents(
                 throttler=throttler,
             )
             results.append(result)
+            if on_document:
+                on_document(idx, len(results), len(failed_urls), url, result, None)
         except Exception:
             logger.exception("crawler.process_failed url=%s", url)
             failed_urls.append(url)
+            if on_document:
+                on_document(idx, len(results), len(failed_urls), url, None, "process_failed")
 
     result = BatchCrawlResult(
         processed=len(urls),
