@@ -1,186 +1,89 @@
-# Service Contracts
+# Service Boundaries
 
-This file defines service boundaries and write ownership.
+This document is authoritative for module ownership and write boundaries.
 
-## Services
+## Ownership Matrix
 
-1. crawler
-2. extractor
-3. geocoder
-4. pipeline (orchestrator)
-5. analytics exporter
-
-Services may share one runtime in MVP, but boundaries stay strict in code.
-Architectural decisions documented here are intended to remove design ambiguity for the implementation agent.
+- `crawler` (`implemented`): `scp_objects`, `documents`, `document_snapshots`
+- `extractor` (`implemented`): `extraction_runs`, `location_mentions`
+- `geocoder` (`implemented`): `geo_locations`, `document_locations`
+- `analytics` (`implemented`): `bi_documents`, `bi_locations`, `bi_document_locations`
+- `control plane` (`implemented`): `pipeline_runs`, `pipeline_stage_runs`, `pipeline_progress`, `pipeline_logs`, `pipeline_commands`
 
 ## 1) Crawler
 
-Responsibilities:
-- discover/generate target URLs
-- download page HTML
-- extract `clean_text`
-- generate PDF
-- persist snapshots
+Files: `services/crawler/*`
 
-Current hardening direction:
-- improve parser heuristics incrementally
-- avoid browser-automation complexity for now
-- continue on weak text quality with warning logs rather than failing the batch
+Responsibilities (`implemented`):
+- canonical URL generation
+- HTML fetch with retry/backoff and throttling
+- clean text extraction
+- PDF rendering to `pdf_blob`
+- snapshot create-if-changed
+- PDF backfill if snapshot exists but PDF missing
 
-Allowed writes:
-- `scp_objects`
-- `documents`
-- `document_snapshots`
-
-Forbidden writes:
-- `extraction_runs`
-- `location_mentions`
-- `geo_locations`
-- `document_locations`
-- `bi_*`
-
-Idempotency:
-- do not create new snapshot for unchanged document unless explicitly requested
-- still record that the document was checked during incremental refresh even when no snapshot is created
-
-Retry/rate limit:
-- 3 retries with exponential backoff
-- minimum 1 request/second with jitter
-
-Incremental refresh source:
-- weekly incremental refresh traverses the full canonical range `SCP-001` through `SCP-7999`
-- missing canonical documents must be created automatically when first encountered
-- incremental crawl may still fetch already-known canonical documents to detect change
+Notable limits:
+- `partial`: content extraction heuristics are rule-based and can miss edge cases
 
 ## 2) Extractor
 
-Responsibilities:
-- read snapshot text
-- call LLM
-- validate response JSON
-- persist run and mentions
+Files: `services/extractor/*`
 
-Allowed writes:
-- `extraction_runs`
-- `location_mentions`
+Responsibilities (`implemented`):
+- build prompt from snapshot clean text
+- call Ollama generation endpoint
+- parse and validate JSON response
+- persist extraction run + mentions
 
-Forbidden writes:
-- `geo_locations`
-- `document_locations`
-- `bi_*`
-
-Validation minimum:
-- valid JSON
-- top-level `locations` array
-- all required fields present
-- numeric `confidence`
+Behavior:
+- retries malformed/transient failures
+- supports callback + stop boundary control
 
 ## 3) Geocoder
 
-Responsibilities:
-- resolve normalized locations
-- cache geocode results
-- persist geo rows
-- link documents to locations
+Files: `services/geocoder/*`
 
-Allowed writes:
-- `geo_locations`
-- `document_locations`
+Responsibilities (`implemented`):
+- normalize mentions (in-place updates)
+- geocode unresolved mentions via Nominatim
+- cache by normalized name
+- create `document_locations` links
 
-Reads:
-- `location_mentions`
-- `extraction_runs`
-- `documents`
-- `document_snapshots`
+Behavior:
+- unresolved/invalid items are logged and skipped
+- supports callback + stop boundary control
 
-Failure behavior:
-- unresolved locations are logged and skipped
-- transient transport failures retry up to 3 attempts with exponential backoff
-- invalid payloads and non-retryable item errors are logged and skipped
-- if the geocoding service itself is unavailable and requires operator intervention, the run stops after preserving already committed progress
+## 4) Analytics
 
-Normalization support rules:
-- normalization updates `location_mentions.normalized_location` in place
-- avoid adding extra normalization-state columns unless required to fix a real logical defect
-- support full renormalization when normalization rules change
-- if normalization produces an invalid result, log it and preserve the prior value
-- if invalid normalization outcomes repeat beyond a small threshold in one run, stop the normalization process
+Files: `services/analytics/service.py`
 
-## 4) Pipeline (Orchestrator)
+Responsibilities (`implemented`):
+- truncate/rebuild BI tables from operational data
+- optional step callback with `start_index` support
 
-Responsibilities:
-- sequence: crawl -> extract -> geocode -> analytics -> export
-- choose processing scope (full, incremental, single-document)
-- coordinate stage reruns
+## 5) BigQuery Export
 
-Write behavior:
-- should not write domain tables owned by other services
-- may write orchestration metadata if a job table is introduced later
-- must emit stage-level and run-level summary logs with counts and duration
+Files: `services/analytics/bigquery_exporter.py`
 
-## 5) Analytics Exporter
+Responsibilities (`implemented`):
+- dataset ensure
+- table export in `full` or `incremental` mode
+- retry per table
 
-Responsibilities:
-- build BI tables in Postgres
-- export BI tables to BigQuery
+Notable limits:
+- `partial`: requires external credentials/permissions; no in-app secret management
 
-Allowed writes:
-- `bi_documents`
-- `bi_locations`
-- `bi_document_locations`
+## 6) Control Plane
 
-Forbidden writes:
-- crawler/extractor/geocoder operational tables
+Files: `services/control/*`
 
-Failure behavior:
-- retry export per table up to 2 attempts with exponential backoff
-- keep BI tables intact on export failure
-- stop export stage on first table failure to preserve cross-table consistency
+Responsibilities (`implemented`):
+- API command enqueueing
+- command polling/execution
+- run/stage state transitions
+- logs/progress emission
+- SSE event stream
 
-## Cross-Service Rules
-
-Ownership:
-- each table has one owning writer service
-
-Default sequence:
-1. crawler
-2. extractor
-3. geocoder
-4. analytics exporter
-
-Reprocessing support:
-- rerun extraction without recrawl
-- rerun geocoding without re-extraction
-- rerun export without analytics rebuild
-
-Determinism:
-- explicit inputs
-- validated outputs
-- structured logs
-- no hidden side effects
-
-
-## Control Plane Service
-
-A control plane layer is introduced.
-
-Responsibilities:
-
-* accept control commands
-* expose monitoring API
-* provide SSE event stream
-
-The control plane writes:
-
-* pipeline_commands
-
-The pipeline orchestrator writes:
-
-* pipeline_runs
-* pipeline_stage_runs
-* pipeline_progress
-* pipeline_logs
-
-The control API must never mutate run or stage state directly.
-
-Only the orchestrator may apply commands.
+Notable limits:
+- `partial`: no authentication/authorization layer
+- `partial`: no dedicated external queue/broker

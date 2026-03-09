@@ -1,274 +1,72 @@
-# Processing Pipeline
+# Pipeline Behavior
 
-This document defines the execution model for DocMap.
-Its purpose is to make pipeline behavior explicit enough that the implementation agent mainly decides implementation details, not pipeline architecture.
+## Stage Order
 
-## Goal
+For `full_pipeline`:
 
-Transform SCP Wiki pages into analytics-ready, geocoded document-location mappings for BigQuery and Looker Studio.
+1. `crawl`
+2. `extract`
+3. `geocode`
+4. `analytics`
+5. `export`
 
-## End-to-End Stages
+## Pipeline Types
 
-1. Target discovery
-2. Crawl and snapshot
-3. Extraction
-4. Geocoding
-5. Analytics rebuild
-6. BigQuery export
+Defined in `services/control/constants.py`:
+- `full_pipeline`
+- `crawl_only`
+- `extract_only`
+- `geocode_only`
+- `analytics_only`
+- `export_only`
 
-## Stage Contracts
+## Run Targets
 
-### 1) Target discovery
+Supported target scopes (`implemented`):
+- `all`
+- `single_document`
+- `document_range`
+- `incremental` (accepted by API, interpreted by current logic as generic scope metadata)
 
-Inputs:
-- configured SCP range
-- manual URL(s)
-- incremental schedule
+## Control Commands
 
-Output:
-- list of document URLs to process
+Command queue type is `retry_stage|retry_run|start_run|cancel_run`.
 
-Failure behavior:
-- unresolved targets are logged and skipped
+- `start_run` (`implemented`)
+- `cancel_run` (`implemented`, soft cancel)
+- `retry_run` (`implemented`, creates replacement run)
+- `retry_stage` (`implemented`)
+- stage `resume` (`implemented`) is encoded as `retry_stage` with `payload_json.resume=true`
 
-### 2) Crawl and snapshot
+## Resume Semantics
 
-Inputs:
-- document URL
+- `implemented`: stage resume keeps current stage progress and resets only downstream stages
+- `implemented`: stage functions use `pipeline_progress.current_index` to continue from offset
+- `partial`: offset semantics are best effort for dynamically changing input sets
 
-Actions:
-- download HTML
-- derive `clean_text`
-- render PDF
-- persist snapshot artifacts
+## Limits and Throughput
 
-Writes:
-- `scp_objects`
-- `documents`
-- `document_snapshots`
+- Stage item limit env var: `DOCMAP_STAGE_ITEM_LIMIT`
+- Parsing rules:
+  - unset -> default `20` in code
+  - `""`, `all`, `0` -> no logical limit
+  - positive integer -> explicit limit
+- Current compose sets `DOCMAP_STAGE_ITEM_LIMIT: 8000` (`implemented` runtime default in local stack)
 
-Incremental rule:
-- compute `sha256(clean_text)` for current crawl
-- compare to latest snapshot hash derived from latest stored `clean_text`
-- insert new snapshot only on first-seen doc, changed hash, or explicit resnapshot
+## Scheduler
 
-Failure behavior:
-- document-level retry with backoff
-- skip failed documents and continue batch
+- Module `services/pipeline/scheduler.py` exists (`implemented`)
+- It schedules `run_incremental_pipeline` using APScheduler cron
+- `partial`: scheduler is not wired into app startup and does not run automatically in current compose
 
-### 3) Extraction
+## Failure and Cancellation
 
-Inputs:
-- `document_snapshots.clean_text`
-- extraction model and prompt version
-
-Output JSON contract:
-
-```json
-{
-  "locations": [
-    {
-      "mention_text": "...",
-      "normalized_location": "...",
-      "precision": "city|admin_region|country|coordinates|unknown",
-      "relation_type": "unspecified",
-      "confidence": 0.0,
-      "evidence_quote": "..."
-    }
-  ]
-}
-```
-
-Writes:
-- `extraction_runs`
-- `location_mentions`
-
-Failure behavior:
-- retry malformed JSON and transient transport errors
-- preserve snapshot for later rerun
-- stop the run if the extraction service itself is unavailable and requires operator intervention
-
-### 4) Geocoding
-
-Inputs:
-- unresolved `normalized_location` values from `location_mentions`
-
-Actions:
-- cache lookup by `normalized_location`
-- Nominatim lookup when cache miss
-- normalize response to canonical geodata fields
-
-Writes:
-- `geo_locations`
-- `document_locations`
-
-Failure behavior:
-- unresolved names are logged
-- continue with remaining locations
-- retry transient transport failures up to 3 attempts with exponential backoff
-- invalid geocoder payloads and non-retryable item errors are logged and skipped
-- stop the run if the geocoding service itself is unavailable and requires operator intervention
-
-### 5) Analytics rebuild
-
-Inputs:
-- operational tables
-
-Writes:
-- `bi_documents`
-- `bi_locations`
-- `bi_document_locations`
-
-Failure behavior:
-- do not mutate operational tables
-- rerunnable independently
-
-### 6) BigQuery export
-
-Inputs:
-- BI tables in Postgres
-
-Outputs:
-- BigQuery tables:
-  - `bi_documents`
-  - `bi_locations`
-  - `bi_document_locations`
-
-Modes:
-- full (`WRITE_TRUNCATE`)
-- incremental (staging + `MERGE`)
-
-Failure behavior:
-- keep local BI tables intact
-- allow export-only retry
-- retry export per table up to 2 attempts with exponential backoff
-- export must be consistent across all BI tables; if one table export fails, the export stage fails rather than continuing with a partial mixed export state
-
-## Weekly Incremental Flow
-
-Default schedule (see `TASKS/phase8_scheduler.md`):
-1. discover targets
-2. crawl + snapshot (changed/new only)
-3. extract new snapshots
-4. geocode unresolved/new normalized locations
-5. rebuild BI tables
-6. export to BigQuery
-
-For the canonical SCP corpus, weekly incremental refresh traverses the full range `SCP-001` through `SCP-7999`.
-Implementation may execute this in one pass or in simpler deterministic batches.
-
-## Partial Rerun Requirements
-
-The pipeline must support:
-- crawl-only rerun
-- extraction-only rerun on existing snapshots
-- geocode-only rerun for unresolved values
-- analytics-only rebuild
-- export-only retry
-
-Incremental refresh rules:
-- revisit canonical documents even when they already exist in `documents`
-- create missing canonical documents automatically when first encountered
-- record document check activity even when content is unchanged
-- only newly created snapshots are extracted during normal incremental runs
-- incremental crawl may still fetch canonical documents to detect change; incrementality applies to downstream persistence and reprocessing, not to skipping verification entirely
-
-Pipeline modes:
-- `single-document`: process one explicitly requested document
-- `incremental`: scheduled/default refresh over the canonical corpus with change detection
-- `full`: full pass over the canonical corpus `SCP-001` through `SCP-7999`
-
-The first implementation does not require resumable/checkpointed run state.
-
-Normalization rules:
-- normalization updates `location_mentions.normalized_location` in place
-- schema should not gain dedicated normalization-state fields unless they are strictly required to fix a real logical defect
-- when normalization rules change, the system must support renormalizing the full relevant corpus
-- invalid normalization outcomes should be logged while preserving the previous value
-- repeated invalid normalization outcomes in one run should stop the process as a likely systemic fault
-
-Crawler quality rules for the current phase:
-- improve text extraction heuristics incrementally rather than introducing a heavier browser-driven crawler
-- operate only on content present in the fetched page
-- if extracted text quality appears weak, log a warning and continue
-- additional hard quality gates can be introduced later after real processed data is available
+- `implemented`: run cancel is cooperative; stage stops at item boundary where supported
+- `implemented`: stage errors mark stage/run failed with message
+- `implemented`: stale pending cancel commands can be rejected during stage retry/resume
 
 ## Observability
 
-All stages must emit structured logs with at least:
-- timestamp
-- service
-- stage
-- target
-- status
-- error (when present)
-- run_id
-
-Each stage and the overall pipeline must also emit a completion summary with:
-- run_id
-- stage
-- processed
-- succeeded
-- failed
-- skipped
-- duration_seconds
-
-## Constraints
-
-- Extraction consumes `clean_text`, never raw HTML.
-- Geocoding consumes `normalized_location`, never raw mention text.
-- Snapshots are immutable.
-- BI tables are derived and rebuildable.
-- Export failures never force recrawl or re-extraction.
-- Fatal infrastructure failures stop the run after preserving already committed progress.
-- External dependency outages that require operator intervention stop the run rather than degrading silently.
-
-
-## Command Processing
-
-Pipeline execution is controlled through pipeline_commands.
-
-Commands are written by the control API.
-
-The orchestrator polls commands and applies them.
-
-Commands are processed:
-
-* sequentially
-* in id order
-* with row locking
-
-Only one command modifying a run may execute at a time.
-
----
-
-## Concurrency Model
-
-Only one pipeline run may be active at any time.
-
-Active statuses:
-
-pending
-running
-cancelling
-
-If a new start_run command arrives while a run is active:
-
-the active run enters cancelling
-after cancellation a new run starts.
-
----
-
-## Retry Semantics
-
-retry_run:
-
-creates a new run.
-
-retry_stage:
-
-resets the stage and downstream stages.
-
-If run is active:
-
-cancel first, then restart.
+- `implemented`: persistent per-run logs in `pipeline_logs`
+- `implemented`: current state in `pipeline_progress`
+- `implemented`: SSE event stream (`run_status`, `stage_status`, `progress`, `log`, `heartbeat`)

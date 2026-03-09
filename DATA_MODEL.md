@@ -1,435 +1,72 @@
 # Data Model
 
-This document defines the relational data model for DocMap.
+This document reflects the current SQL schema in:
+- `database/schema.sql`
+- `database/control_plane.sql`
 
-The purpose of the data model is to represent:
+## Operational Domain Tables (`implemented`)
 
-- SCP documents
-- document snapshots
-- LLM extraction results
-- geographic locations
-- document-to-location relationships
-- BI datasets
+### `scp_objects`
+- canonical SCP IDs
+- key: `id` UUID, unique `canonical_number`
 
-The database uses:
+### `documents`
+- canonical document URLs and metadata
+- key: `id` UUID, unique `url`
+- includes `last_checked_at`
 
-PostgreSQL + PostGIS.
+### `document_snapshots`
+- content snapshots
+- columns: `raw_html`, `clean_text`, `pdf_blob` (`BYTEA`)
 
----
+### `extraction_runs`
+- extraction execution metadata per snapshot
 
-# Design Principles
+### `location_mentions`
+- extracted mentions from LLM output
 
-The model follows these principles:
+### `geo_locations`
+- resolved normalized locations + PostGIS geography point
+- unique `normalized_location`
 
-1. Source snapshots are immutable.
-2. Extraction results are versioned.
-3. Geocoding is separated from extraction.
-4. Document-to-location mapping is explicit.
-5. BI datasets are isolated from operational data.
+### `document_locations`
+- link table between document and geocoded location
 
----
+## BI Tables (`implemented`)
 
-# Entity Overview
+- `bi_documents`
+- `bi_locations`
+- `bi_document_locations`
 
-Main entities:
+These are rebuildable denormalized analytics tables.
 
+## Control Plane Tables (`implemented`)
 
-SCP Object
-↓
-Document
-↓
-Document Snapshot
-↓
-Extraction Run
-↓
-Location Mention
-↓
-Geo Location
-↓
-Document Location
+### `pipeline_runs`
+- run lifecycle, status, target scope, parameters JSON
 
+### `pipeline_stage_runs`
+- per-stage status and counters for a run
 
----
+### `pipeline_progress`
+- latest progress cursor per run+stage
 
-# SCP Objects
+### `pipeline_logs`
+- operator-facing persisted logs
 
-Represents canonical SCP identifiers.
+### `pipeline_commands`
+- command queue consumed by orchestrator
 
-Example:
+## Enumerations/Constraints (`implemented`)
 
+Control-plane SQL defines enums/checks for:
+- run statuses
+- stage statuses
+- command statuses
+- command types
+- pipeline type enum
 
-SCP-173
-SCP-096
-SCP-3000
+## Notes
 
-
-Table:
-
-
-scp_objects
-
-
-Fields:
-
-| field | description |
-|------|-------------|
-id | UUID primary key |
-canonical_number | SCP number (e.g. SCP-173) |
-
-Constraints:
-
-
-UNIQUE(canonical_number)
-
-
----
-
-# Documents
-
-Represents the canonical SCP Wiki page.
-
-Example:
-
-
-https://scp-wiki.wikidot.com/scp-173
-
-
-Table:
-
-
-documents
-
-
-Fields:
-
-| field | description |
-|------|-------------|
-id | UUID primary key |
-scp_object_id | reference to SCP object |
-url | canonical document URL |
-title | page title |
-created_at | first discovery timestamp |
-last_checked_at | last refresh check timestamp, even if unchanged |
-
-Constraints:
-
-
-UNIQUE(url)
-
-
-Relationship:
-
-
-scp_objects 1 → N documents
-
-
----
-
-# Document Snapshots
-
-Represents a specific version of the document content.
-
-Snapshots allow:
-
-- reproducibility
-- extraction reruns
-- historical comparison
-
-Table:
-
-
-document_snapshots
-
-
-Fields:
-
-| field | description |
-|------|-------------|
-id | UUID primary key |
-document_id | document reference |
-raw_html | original HTML |
-clean_text | cleaned text for LLM |
-pdf_path | path to PDF snapshot |
-created_at | snapshot timestamp |
-
-Relationship:
-
-
-documents 1 → N document_snapshots
-
-
-Snapshots are immutable.
-
----
-
-# Extraction Runs
-
-Represents one execution of the LLM extraction.
-
-This allows comparing:
-
-- models
-- prompt versions
-- pipeline versions
-
-Table:
-
-
-extraction_runs
-
-
-Fields:
-
-| field | description |
-|------|-------------|
-id | UUID primary key |
-snapshot_id | document snapshot |
-model | LLM model used |
-prompt_version | prompt identifier |
-pipeline_version | pipeline version |
-created_at | extraction timestamp |
-
-Relationship:
-
-
-document_snapshots 1 → N extraction_runs
-
-
----
-
-# Location Mentions
-
-Represents geographic mentions detected by the LLM.
-
-Example mention:
-
-
-"near Kyoto"
-
-
-Normalized form:
-
-
-Kyoto, Japan
-
-
-Table:
-
-
-location_mentions
-
-
-Fields:
-
-| field | description |
-|------|-------------|
-id | UUID primary key |
-run_id | extraction run reference |
-mention_text | text span |
-normalized_location | normalized place name |
-precision | city / region / country |
-relation_type | optional semantic relation |
-confidence | model confidence |
-evidence_quote | supporting quote |
-
-Relationship:
-
-
-extraction_runs 1 → N location_mentions
-
-Normalization note:
-
-`normalized_location` is updated in place by the normalization step.
-No dedicated normalization-state or version columns are required in the current architecture.
-
-
----
-
-# Geo Locations
-
-Represents resolved geographic coordinates.
-
-Example:
-
-
-Kyoto, Japan
-35.0116
-135.7681
-
-
-Table:
-
-
-geo_locations
-
-
-Fields:
-
-| field | description |
-|------|-------------|
-id | UUID primary key |
-normalized_location | canonical location string |
-country | country |
-region | administrative region |
-city | city |
-latitude | latitude |
-longitude | longitude |
-precision | location precision |
-geom | PostGIS geometry |
-
-Constraints:
-
-
-UNIQUE(normalized_location)
-
-
----
-
-# Document Locations
-
-Represents the mapping between documents and geocoded locations.
-
-This allows:
-
-- one document → many locations
-- one location → many documents
-
-Table:
-
-
-document_locations
-
-
-Fields:
-
-| field | description |
-|------|-------------|
-id | UUID primary key |
-document_id | document reference |
-location_id | geolocation reference |
-mention_id | source mention |
-
-Relationship:
-
-
-documents N ↔ N geo_locations
-
-
-via `document_locations`.
-
----
-
-# BI Tables
-
-Operational tables should not be used directly by BI tools.
-
-Instead, analytics tables are generated.
-
-Examples:
-
-
-bi_documents
-bi_locations
-bi_document_locations
-
-
-These tables are exported to BigQuery.
-
-Looker Studio reads from BigQuery only.
-
----
-
-# Operational vs BI Layer
-
-Operational tables:
-
-
-scp_objects
-documents
-document_snapshots
-extraction_runs
-location_mentions
-geo_locations
-document_locations
-
-
-BI tables:
-
-
-bi_documents
-bi_locations
-bi_document_locations
-
-
-BI tables are derived and may be rebuilt at any time.
-
-
-## Operational Control Plane Tables
-
-The control plane introduces operational metadata tables.
-
-These tables are not part of canonical SCP data.
-
-They may be cleaned or archived.
-
-### pipeline_commands
-
-Command queue for pipeline control.
-
-Fields:
-
-* id
-* command_type
-* pipeline_run_id
-* stage_name
-* payload_json
-* status
-* requested_at
-* processed_at
-* error_message
-
----
-
-### pipeline_logs
-
-Primary operator log storage.
-
-Fields:
-
-* id
-* pipeline_run_id
-* stage_name
-* service_name
-* level
-* message
-* document_id
-* document_url
-* current_index
-* payload_json
-* created_at
-
-Retention:
-
-logs may be removed after 10 runs.
-
----
-
-### pipeline_progress
-
-Current progress state.
-
-One row per:
-
-pipeline_run_id + stage_name
-
-Fields:
-
-* current_index
-* total_items
-* items_completed
-* items_failed
-* current_document_id
-* current_document_url
-* current_item_label
-* message
-* updated_at
+- `implemented`: log retention helper function keeps logs for most recent 10 runs
+- `partial`: no explicit schema migration history table; startup migration logic is environment-driven and idempotent where possible

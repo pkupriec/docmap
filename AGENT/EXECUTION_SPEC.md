@@ -376,6 +376,10 @@ A development phase is complete when:
 3. Docker services start.
 4. Basic functionality works.
 5. Verification appropriate to the change has been performed; when tests are used, they pass.
+6. Repository documentation package is updated and matches the implemented system.
+7. README is usable as the first entry point for a new contributor or operator.
+8. Verification notes include a documentation consistency check against code, schema, and runtime configuration.
+
 
 Only then may the agent proceed to the next phase.
 
@@ -428,3 +432,31 @@ Agents must not:
 * introduce multiple concurrent runs
 * introduce scheduling systems
 * introduce authentication systems
+
+## Documentation Synchronization
+
+Documentation is a required deliverable of implementation, not a follow-up task.
+
+After completing any non-trivial implementation phase, the agent must update the documentation package so that it matches the repository state exactly.
+
+Minimum documentation package:
+- README.md
+- PROJECT.md
+- ARCHITECTURE.md
+- SERVICES.md
+- PIPELINE.md
+- DATA_MODEL.md
+- docs/CONFIGURATION.md
+- docs/DEVELOPMENT.md
+- docs/OPERATIONS.md
+- docs/VERIFICATION.md
+- docs/REPOSITORY_MAP.md
+- docs/API.md or docs/CONTROL_API.md when applicable
+- CHANGELOG.md
+
+Documentation rules:
+- describe implemented behavior as current state
+- mark future work explicitly as planned
+- remove or rewrite stale statements that no longer match code, schema, runtime, or task files
+- keep service boundaries, data ownership, and pipeline behavior consistent across all docs
+- do not leave undocumented operator-visible behavior, required configuration, or verification steps

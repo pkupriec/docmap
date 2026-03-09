@@ -191,3 +191,16 @@ The agent must not redesign the system without explicit approval.
 
 All major architectural decisions are already documented.
 The agent should not spend effort redesigning decisions that are already fixed in the docs.
+
+## Finalization Step
+
+Before considering a task complete, the agent must perform a documentation synchronization pass.
+
+Required finalization sequence:
+1. implement the change
+2. verify the change
+3. update affected documentation
+4. check for stale statements in README, architecture, pipeline, data model, operations, and configuration docs
+5. include documentation updates in the same change set unless the user explicitly asked not to
+
+The agent must treat stale documentation as a defect.

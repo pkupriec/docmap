@@ -1,24 +1,50 @@
 # DocMap
 
-DocMap is a system that extracts geographic references from SCP Wiki documents and visualizes them on a map.
+DocMap is an operator-driven data pipeline for SCP Wiki documents:
 
-The system processes SCP documents, extracts geographic mentions using LLMs, geocodes them, and publishes the results for visualization in Google Looker Studio.
+`SCP Wiki -> Crawl -> Extraction (LLM) -> Geocoding -> Analytics -> BigQuery export`
 
-Main pipeline:
+## Current Status
 
-SCP Wiki → Crawler → LLM Extraction → Geocoding → PostGIS → BigQuery → Looker
+- `implemented`: operational schema (`database/schema.sql`) and control-plane schema (`database/control_plane.sql`)
+- `implemented`: control API + orchestrator (`services/control/*`)
+- `implemented`: operator UI (`ui/`) with start/cancel/retry/retry-stage/resume-stage
+- `implemented`: crawler/extractor/geocoder/analytics/export services
+- `partial`: scheduler exists in code (`services/pipeline/scheduler.py`) but is not started by the main app
+- `partial`: BigQuery export works when GCP env + credentials are configured
+- `planned`: external publication/dashboard automation (Looker operationalization)
 
-The project is designed for AI-assisted development using coding agents.
+## Quick Start (Docker)
 
-See:
+1. Ensure Docker Desktop is running.
+2. Start stack:
+   `docker compose -f infra/docker-compose.yml up -d --build`
+3. Open:
+   - API: `http://localhost:8000`
+   - Control UI: `http://localhost:5173`
+   - pgAdmin: `http://localhost:5050`
 
-PROJECT.md
-ARCHITECTURE.md
-DATA_MODEL.md
-PIPELINE.md
+## Key Entry Points
 
-## Control Plane (Phase 10)
+- App entrypoint: `main.py`
+- API app factory: `services/control/api.py:create_app`
+- Orchestrator: `services/control/orchestrator.py`
+- Compose: `infra/docker-compose.yml`
+- DB schemas:
+  - `database/schema.sql`
+  - `database/control_plane.sql`
 
-- Backend API: FastAPI app in `main.py` with endpoints under `/api` (see `docs/CONTROL_API.openapi.yaml`).
-- Control schema: `database/control_plane.sql` (mounted in `infra/docker-compose.yml`).
-- Operator UI: React app in `ui/` (Runs List, Run Details, Live Logs).
+## Documentation Index
+
+- Project scope/status: [PROJECT.md](PROJECT.md)
+- Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Service boundaries: [SERVICES.md](SERVICES.md)
+- Pipeline behavior: [PIPELINE.md](PIPELINE.md)
+- Data model: [DATA_MODEL.md](DATA_MODEL.md)
+- Configuration: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
+- Development workflow: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+- Operations runbook: [docs/OPERATIONS.md](docs/OPERATIONS.md)
+- Verification guide: [docs/VERIFICATION.md](docs/VERIFICATION.md)
+- Repository map: [docs/REPOSITORY_MAP.md](docs/REPOSITORY_MAP.md)
+- Control API: [docs/CONTROL_API.md](docs/CONTROL_API.md)
+- Change history: [CHANGELOG.md](CHANGELOG.md)
