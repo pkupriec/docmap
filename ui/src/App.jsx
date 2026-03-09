@@ -34,6 +34,7 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [error, setError] = useState("");
   const [showStart, setShowStart] = useState(false);
+  const [showStartUnprocessed, setShowStartUnprocessed] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [filters, setFilters] = useState({ level: "", stage_name: "", service_name: "" });
 
@@ -128,6 +129,7 @@ export default function App() {
     try {
       await apiPost("/runs", formData);
       setShowStart(false);
+      setShowStartUnprocessed(false);
       loadRuns();
     } catch (e) {
       setError(String(e));
@@ -153,6 +155,7 @@ export default function App() {
         <h1>DocMap Control Plane</h1>
         <div className="header-actions">
           <button onClick={() => setShowStart(true)}>Start Run</button>
+          <button onClick={() => setShowStartUnprocessed(true)}>Process Unprocessed</button>
           <span className="badge">Active: {activeRun ? `#${activeRun.id} ${activeRun.status}` : "none"}</span>
         </div>
       </header>
@@ -280,19 +283,28 @@ export default function App() {
       </main>
 
       {showStart ? <StartRunModal onClose={() => setShowStart(false)} onSubmit={submitStartRun} /> : null}
+      {showStartUnprocessed ? (
+        <StartRunModal
+          mode="unprocessed"
+          onClose={() => setShowStartUnprocessed(false)}
+          onSubmit={submitStartRun}
+        />
+      ) : null}
     </div>
   );
 }
 
-function StartRunModal({ onClose, onSubmit }) {
+function StartRunModal({ onClose, onSubmit, mode = "default" }) {
   const [pipeline_type, setPipelineType] = useState("full_pipeline");
   const [target_scope, setTargetScope] = useState("all");
   const [document_url, setDocumentUrl] = useState("");
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
+  const unprocessedMode = mode === "unprocessed";
 
   const submit = () => {
     const payload = { pipeline_type, target_scope, options: {} };
+    if (unprocessedMode) payload.options.process_unprocessed_only = true;
     if (target_scope === "single_document" && document_url) payload.document_url = document_url;
     if (target_scope === "document_range" && rangeStart && rangeEnd) {
       payload.document_range = { start: Number(rangeStart), end: Number(rangeEnd) };
@@ -303,7 +315,10 @@ function StartRunModal({ onClose, onSubmit }) {
   return (
     <div className="modal-backdrop">
       <div className="modal">
-        <h3>Start Run</h3>
+        <h3>{unprocessedMode ? "Process Unprocessed" : "Start Run"}</h3>
+        {unprocessedMode ? (
+          <div>Mode: crawl only missing snapshot/PDF and extract only snapshots without extraction runs.</div>
+        ) : null}
         <label>Pipeline Type
           <select value={pipeline_type} onChange={(e) => setPipelineType(e.target.value)}>
             <option>full_pipeline</option>

@@ -135,3 +135,57 @@ def get_latest_snapshot_missing_pdf(conn: Connection, document_id: str) -> str |
     if not latest or latest.has_pdf_blob:
         return None
     return latest.snapshot_id
+
+
+def filter_unprocessed_urls(
+    conn: Connection,
+    urls: list[str],
+    *,
+    include_missing_pdf: bool = True,
+) -> list[str]:
+    if not urls:
+        return []
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                d.url,
+                EXISTS (
+                    SELECT 1
+                    FROM document_snapshots ds
+                    WHERE ds.document_id = d.id
+                ) AS has_snapshot,
+                COALESCE(
+                    (
+                        SELECT ds.pdf_blob IS NOT NULL
+                        FROM document_snapshots ds
+                        WHERE ds.document_id = d.id
+                        ORDER BY ds.created_at DESC
+                        LIMIT 1
+                    ),
+                    FALSE
+                ) AS latest_has_pdf
+            FROM documents d
+            WHERE d.url = ANY(%s)
+            """,
+            (urls,),
+        )
+        known_rows = cur.fetchall()
+
+    known_by_url: dict[str, tuple[bool, bool]] = {
+        str(row[0]): (bool(row[1]), bool(row[2])) for row in known_rows
+    }
+    filtered: list[str] = []
+    for url in urls:
+        known = known_by_url.get(url)
+        if not known:
+            filtered.append(url)
+            continue
+        has_snapshot, latest_has_pdf = known
+        if not has_snapshot:
+            filtered.append(url)
+            continue
+        if include_missing_pdf and not latest_has_pdf:
+            filtered.append(url)
+    return filtered

@@ -46,6 +46,7 @@ The header contains:
 
 - title: "DocMap Control Plane"
 - Start Run button
+- Process Unprocessed button (`implemented`)
 - active run status badge
 - backend connectivity indicator
 
@@ -254,6 +255,38 @@ On success:
 On error:
 
 - show inline error
+
+---
+
+# Process Unprocessed Action
+
+## Purpose
+
+Submit `start_run` with unprocessed-only behavior for `crawl` and `extract`.
+
+## Trigger
+
+Header button: `Process Unprocessed`.
+
+## API payload
+
+Submit to `POST /api/runs` with:
+
+```json
+{
+  "pipeline_type": "full_pipeline",
+  "target_scope": "all",
+  "options": {
+    "process_unprocessed_only": true
+  }
+}
+```
+
+## Behavior
+
+- `crawl`: process URLs without snapshots and URLs whose latest snapshot has no PDF blob.
+- `extract`: process snapshots without `extraction_runs`.
+- explicit scopes (`single_document`, `document_range`) keep forced reprocessing behavior.
 
 ---
 

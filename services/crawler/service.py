@@ -10,6 +10,7 @@ from services.crawler.parser import extract_clean_text, extract_title
 from services.crawler.pdf_renderer import render_pdf_blob
 from services.crawler.repository import (
     canonical_number_from_url,
+    filter_unprocessed_urls as filter_unprocessed_urls_in_db,
     get_latest_snapshot_missing_pdf,
     get_or_create_document,
     get_or_create_scp_object,
@@ -40,6 +41,15 @@ class BatchCrawlResult:
 
 DocumentCallback = Callable[[int, int, int, str, CrawlResult | None, str | None], None]
 StopCallback = Callable[[], bool]
+
+
+def filter_unprocessed_urls(
+    urls: list[str],
+    *,
+    include_missing_pdf: bool = True,
+) -> list[str]:
+    with get_connection() as conn:
+        return filter_unprocessed_urls_in_db(conn, urls, include_missing_pdf=include_missing_pdf)
 
 
 def process_document(

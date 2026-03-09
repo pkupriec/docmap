@@ -20,6 +20,10 @@ Base path: `/api`
 - `POST /runs`
   - body: `StartRunRequest`
   - enqueues `start_run`
+  - supported option: `options.process_unprocessed_only` (`implemented`)
+    - crawl stage: process URLs with no snapshots yet, plus URLs whose latest snapshot is missing `pdf_blob`
+    - extract stage: process snapshots that have no `extraction_runs`
+    - single-document and range targets still force reprocessing (new snapshot attempt)
 - `GET /runs/{run_id}`
 - `GET /runs/{run_id}/stages`
 - `GET /runs/{run_id}/progress`

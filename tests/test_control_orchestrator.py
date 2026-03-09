@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
+from services.control import orchestrator as orchestrator_module
 from services.control.orchestrator import ControlOrchestrator
 
 
@@ -64,12 +69,21 @@ class FakeRepo:
     def reset_stages_from(self, run_id: int, stage_name: str) -> None:
         self.reset_calls.append((run_id, stage_name))
 
+    def reset_stages_after(self, run_id: int, stage_name: str) -> None:
+        self.reset_calls.append((run_id, stage_name))
+
+    def reject_pending_cancel_commands(self, run_id: int, reason: str) -> int:
+        return 0
+
     def set_run_status(self, run_id: int, status: str, **kwargs) -> None:
         self.runs[run_id]["status"] = status
         self.run_status_updates.append((run_id, status, bool(kwargs.get("clear_finished"))))
 
     def list_stages(self, run_id: int):
         return []
+
+    def get_stage_run(self, run_id: int, stage_name: str):
+        return None
 
     def set_stage_status(self, *args, **kwargs):
         return None
@@ -184,3 +198,90 @@ def test_soft_cancel_completes_current_stage_then_marks_run_cancelled(monkeypatc
     orchestrator._execute_run(3)
 
     assert repo.runs[3]["status"] == "cancelled"
+
+
+class _StageRepo:
+    def __init__(self) -> None:
+        self.logs: list[str] = []
+
+    def get_progress_entry(self, _run_id: int, _stage: str):
+        return {}
+
+    def upsert_progress(self, *args, **kwargs):
+        return None
+
+    def set_stage_status(self, *args, **kwargs):
+        return None
+
+    def has_pending_cancel_command(self, _run_id: int) -> bool:
+        return False
+
+    def has_pending_operator_command_for_other_run(self, _run_id: int) -> bool:
+        return False
+
+    def mark_active_run_cancelling(self, _run_id: int) -> None:
+        return None
+
+    def mark_cancel_commands_applied(self, _run_id: int) -> None:
+        return None
+
+    def append_log(self, _run_id: int, _stage: str | None, _service: str, _level: str, message: str, **kwargs):
+        self.logs.append(message)
+        return 1
+
+
+def test_crawl_single_document_forces_resnapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _StageRepo()
+    orchestrator = ControlOrchestrator(repository=repo)
+    captured: dict[str, object] = {}
+
+    def _fake_process_documents(urls, **kwargs):
+        captured["urls"] = urls
+        captured["resnapshot"] = kwargs.get("resnapshot")
+        return SimpleNamespace(processed=len(urls), succeeded=len(urls), failed=0)
+
+    monkeypatch.setattr(orchestrator_module, "process_documents", _fake_process_documents)
+
+    run = {
+        "target_scope": "single_document",
+        "parameters_json": {
+            "document_url": "https://scp-wiki.wikidot.com/scp-173",
+            "options": {"process_unprocessed_only": True},
+        },
+    }
+    orchestrator._run_stage(1, "crawl", run)
+
+    assert captured["urls"] == ["https://scp-wiki.wikidot.com/scp-173"]
+    assert captured["resnapshot"] is True
+
+
+def test_crawl_unprocessed_mode_filters_urls(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _StageRepo()
+    orchestrator = ControlOrchestrator(repository=repo)
+    captured: dict[str, object] = {}
+
+    all_urls = [
+        "https://scp-wiki.wikidot.com/scp-001",
+        "https://scp-wiki.wikidot.com/scp-002",
+        "https://scp-wiki.wikidot.com/scp-003",
+    ]
+    filtered_urls = [all_urls[1]]
+
+    monkeypatch.setattr(orchestrator_module, "generate_scp_urls", lambda _start, _end: all_urls)
+    monkeypatch.setattr(orchestrator_module, "filter_unprocessed_urls", lambda urls, **kwargs: filtered_urls)
+
+    def _fake_process_documents(urls, **kwargs):
+        captured["urls"] = urls
+        captured["resnapshot"] = kwargs.get("resnapshot")
+        return SimpleNamespace(processed=len(urls), succeeded=len(urls), failed=0)
+
+    monkeypatch.setattr(orchestrator_module, "process_documents", _fake_process_documents)
+
+    run = {
+        "target_scope": "all",
+        "parameters_json": {"options": {"process_unprocessed_only": True}},
+    }
+    orchestrator._run_stage(1, "crawl", run)
+
+    assert captured["urls"] == filtered_urls
+    assert captured["resnapshot"] is False

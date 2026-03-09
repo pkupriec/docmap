@@ -24,3 +24,28 @@ def test_process_documents_isolates_failures(monkeypatch: pytest.MonkeyPatch) ->
     assert result.succeeded == 1
     assert result.failed == 1
     assert result.failed_urls == ["https://scp-wiki.wikidot.com/bad"]
+
+
+def test_filter_unprocessed_urls_delegates_to_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls = [
+        "https://scp-wiki.wikidot.com/scp-001",
+        "https://scp-wiki.wikidot.com/scp-002",
+    ]
+
+    class _ConnCtx:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(service, "get_connection", lambda: _ConnCtx())
+    monkeypatch.setattr(
+        service,
+        "filter_unprocessed_urls_in_db",
+        lambda _conn, _urls, include_missing_pdf=True: [_urls[1]],
+    )
+
+    filtered = service.filter_unprocessed_urls(urls, include_missing_pdf=True)
+
+    assert filtered == ["https://scp-wiki.wikidot.com/scp-002"]

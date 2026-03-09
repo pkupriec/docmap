@@ -10,7 +10,7 @@ from services.analytics import rebuild_analytics
 from services.analytics.bigquery_exporter import export_all_bi_tables
 from services.control.constants import STAGES_BY_PIPELINE_TYPE, downstream_stages
 from services.control.repository import ControlRepository
-from services.crawler import generate_scp_urls, process_documents
+from services.crawler import filter_unprocessed_urls, generate_scp_urls, process_documents
 from services.extractor import process_pending_snapshots
 from services.geocoder import normalize_pending_mentions, process_pending_mentions
 
@@ -298,6 +298,9 @@ class ControlOrchestrator:
         if stage == "crawl":
             target_scope = run.get("target_scope")
             params = run.get("parameters_json") or {}
+            options = params.get("options") or {}
+            process_unprocessed_only = bool(options.get("process_unprocessed_only"))
+            force_resnapshot = target_scope in ("single_document", "document_range")
             if target_scope == "single_document" and params.get("document_url"):
                 urls = [params["document_url"]]
             elif target_scope == "document_range" and params.get("document_range"):
@@ -325,6 +328,31 @@ class ControlOrchestrator:
                         f"Stage processing limited to first {TEST_STAGE_ITEM_LIMIT} items",
                         event_type="progress",
                     )
+
+            initial_total = len(urls)
+            if process_unprocessed_only and not force_resnapshot:
+                urls = filter_unprocessed_urls(urls, include_missing_pdf=True)
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "pipeline",
+                    "INFO",
+                    (
+                        "Unprocessed-only mode enabled: "
+                        f"selected {len(urls)} of {initial_total} URLs "
+                        "(missing snapshot or missing latest PDF)"
+                    ),
+                    event_type="progress",
+                )
+            elif force_resnapshot:
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "pipeline",
+                    "INFO",
+                    "Explicit target requested: crawl will force resnapshot",
+                    event_type="progress",
+                )
 
             total = len(urls)
             progress = self.repository.get_progress_entry(run_id, stage) or {}
@@ -431,6 +459,7 @@ class ControlOrchestrator:
 
             result = process_documents(
                 urls_to_process,
+                resnapshot=force_resnapshot,
                 on_document=on_crawl_document,
                 should_stop=lambda: stop_requested,
             )
@@ -462,9 +491,22 @@ class ControlOrchestrator:
             base_completed = int(progress.get("items_completed") or 0)
             base_failed = int(progress.get("items_failed") or 0)
             stop_requested = False
+            params = run.get("parameters_json") or {}
+            options = params.get("options") or {}
+            process_unprocessed_only = bool(options.get("process_unprocessed_only"))
             total_snapshots = 0
             succeeded = base_completed
             failed = base_failed
+
+            if process_unprocessed_only:
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "pipeline",
+                    "INFO",
+                    "Unprocessed-only mode enabled: extract scans snapshots without extraction runs",
+                    event_type="progress",
+                )
 
             def on_extract_snapshot(
                 processed: int,
