@@ -92,18 +92,34 @@ def build_bi_document_locations(conn: Connection) -> int:
         return cur.rowcount
 
 
-def rebuild_analytics(*, on_step: AnalyticsStepCallback | None = None) -> dict[str, int]:
+def rebuild_analytics(*, on_step: AnalyticsStepCallback | None = None, start_index: int = 0) -> dict[str, int]:
     logger.info("analytics.rebuild_start")
+    steps = [
+        ("bi_documents", build_bi_documents),
+        ("bi_locations", build_bi_locations),
+        ("bi_document_locations", build_bi_document_locations),
+    ]
+    if start_index < 0:
+        start_index = 0
+    if start_index > len(steps):
+        start_index = len(steps)
+
+    documents_rows = 0
+    locations_rows = 0
+    links_rows = 0
     with get_connection() as conn:
-        documents_rows = build_bi_documents(conn)
-        if on_step:
-            on_step("bi_documents", documents_rows)
-        locations_rows = build_bi_locations(conn)
-        if on_step:
-            on_step("bi_locations", locations_rows)
-        links_rows = build_bi_document_locations(conn)
-        if on_step:
-            on_step("bi_document_locations", links_rows)
+        for idx, (name, fn) in enumerate(steps):
+            if idx < start_index:
+                continue
+            rows = fn(conn)
+            if name == "bi_documents":
+                documents_rows = rows
+            elif name == "bi_locations":
+                locations_rows = rows
+            else:
+                links_rows = rows
+            if on_step:
+                on_step(name, rows)
         conn.commit()
 
     stats = {

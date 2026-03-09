@@ -18,7 +18,7 @@ def get_snapshot_clean_text(conn: Connection, snapshot_id: str) -> str | None:
         return row[0] if row else None
 
 
-def get_unprocessed_snapshot_ids(conn: Connection, limit: int = 100) -> list[str]:
+def get_unprocessed_snapshot_ids(conn: Connection, limit: int = 100, offset: int = 0) -> list[str]:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -28,11 +28,12 @@ def get_unprocessed_snapshot_ids(conn: Connection, limit: int = 100) -> list[str
             WHERE er.id IS NULL
             ORDER BY ds.created_at ASC
             LIMIT %s
+            OFFSET %s
             """,
-            (limit,),
+            (limit, offset),
         )
         snapshot_ids = [str(row[0]) for row in cur.fetchall()]
-    logger.info("extractor.pending_snapshots_loaded count=%s limit=%s", len(snapshot_ids), limit)
+    logger.info("extractor.pending_snapshots_loaded count=%s limit=%s offset=%s", len(snapshot_ids), limit, offset)
     return snapshot_ids
 
 

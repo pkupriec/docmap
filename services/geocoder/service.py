@@ -27,22 +27,30 @@ class GeocodeBatchResult:
 
 
 MentionCallback = Callable[[int, int, int, int, PendingMention, str | None, str | None], None]
+StopCallback = Callable[[], bool]
 
 
 def process_pending_mentions(
     limit: int = 1000,
     *,
+    offset: int = 0,
     on_mention: MentionCallback | None = None,
+    should_stop: StopCallback | None = None,
 ) -> GeocodeBatchResult:
     logger.info("geocoder.batch_start limit=%s", limit)
     with get_connection() as conn:
-        pending = get_pending_mentions(conn, limit=limit)
+        pending = get_pending_mentions(conn, limit=limit, offset=offset)
         geocoded = 0
         linked = 0
         unresolved = 0
+        processed_count = 0
 
         total = len(pending)
         for idx, mention in enumerate(pending, start=1):
+            if should_stop and should_stop():
+                logger.info("geocoder.batch_stop_requested processed=%s total=%s", idx - 1, total)
+                break
+            processed_count = idx
             try:
                 status = _process_single_mention(conn, mention)
                 if status == "linked":
@@ -67,7 +75,7 @@ def process_pending_mentions(
         conn.commit()
 
     result = GeocodeBatchResult(
-        processed=len(pending),
+        processed=processed_count,
         geocoded=geocoded,
         linked=linked,
         unresolved=unresolved,

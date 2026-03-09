@@ -47,3 +47,11 @@ def downstream_stages(stage_name: str) -> list[str]:
         raise ValueError(f"Unknown stage: {stage_name}")
     idx = ordered.index(stage_name)
     return ordered[idx:]
+
+
+def downstream_stages_after(stage_name: str) -> list[str]:
+    ordered = [name for name, _ in sorted(STAGE_ORDER.items(), key=lambda item: item[1])]
+    if stage_name not in STAGE_ORDER:
+        raise ValueError(f"Unknown stage: {stage_name}")
+    idx = ordered.index(stage_name)
+    return ordered[idx + 1 :]

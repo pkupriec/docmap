@@ -15,7 +15,7 @@ class PendingMention:
     normalized_location: str
 
 
-def get_pending_mentions(conn: Connection, *, limit: int = 1000) -> list[PendingMention]:
+def get_pending_mentions(conn: Connection, *, limit: int = 1000, offset: int = 0) -> list[PendingMention]:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -29,8 +29,9 @@ def get_pending_mentions(conn: Connection, *, limit: int = 1000) -> list[Pending
               AND btrim(lm.normalized_location) <> ''
             ORDER BY lm.id
             LIMIT %s
+            OFFSET %s
             """,
-            (limit,),
+            (limit, offset),
         )
         rows = cur.fetchall()
     mentions = [
@@ -41,7 +42,7 @@ def get_pending_mentions(conn: Connection, *, limit: int = 1000) -> list[Pending
         )
         for row in rows
     ]
-    logger.info("geocoder.pending_mentions_loaded count=%s limit=%s", len(mentions), limit)
+    logger.info("geocoder.pending_mentions_loaded count=%s limit=%s offset=%s", len(mentions), limit, offset)
     return mentions
 
 

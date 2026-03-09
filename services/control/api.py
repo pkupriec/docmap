@@ -154,6 +154,20 @@ def retry_stage(run_id: int, stage_name: str) -> CommandAcceptedResponse:
     return CommandAcceptedResponse(command_id=command_id, status="pending")
 
 
+@router.post("/runs/{run_id}/stages/{stage_name}/resume", status_code=202, response_model=CommandAcceptedResponse)
+def resume_stage(run_id: int, stage_name: str) -> CommandAcceptedResponse:
+    repo = ControlRepository()
+    if not repo.run_exists(run_id) or not repo.stage_exists(run_id, stage_name):
+        return _error_response(404, "not_found", "run or stage not found")
+    command_id = repo.enqueue_command(
+        "retry_stage",
+        pipeline_run_id=run_id,
+        stage_name=stage_name,
+        payload_json={"resume": True},
+    )
+    return CommandAcceptedResponse(command_id=command_id, status="pending")
+
+
 @router.get("/commands/{command_id}")
 def get_command(command_id: int) -> dict[str, Any]:
     repo = ControlRepository()

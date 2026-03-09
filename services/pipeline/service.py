@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -14,7 +15,26 @@ from services.geocoder import normalize_pending_mentions, process_pending_mentio
 
 logger = logging.getLogger(__name__)
 SCP_START = 1
-SCP_END = 7999
+
+
+def _stage_item_limit() -> int | None:
+    raw_value = os.getenv("DOCMAP_STAGE_ITEM_LIMIT")
+    if raw_value is None:
+        return 20
+    raw_value = raw_value.strip()
+    if raw_value == "" or raw_value.lower() == "all" or raw_value == "0":
+        return None
+    try:
+        parsed = int(raw_value)
+        if parsed > 0:
+            return parsed
+    except ValueError:
+        pass
+    logger.warning("pipeline.invalid_stage_item_limit value=%s fallback=20", raw_value)
+    return 20
+
+
+TEST_STAGE_ITEM_LIMIT = _stage_item_limit()
 
 
 @dataclass(frozen=True)
@@ -40,7 +60,9 @@ class PipelineResult:
 def run_incremental_pipeline(target_urls: list[str] | None = None) -> PipelineResult:
     run_id = str(uuid.uuid4())
     started_at = time.monotonic()
-    urls = target_urls if target_urls is not None else generate_scp_urls(SCP_START, SCP_END)
+    crawl_end = TEST_STAGE_ITEM_LIMIT if TEST_STAGE_ITEM_LIMIT is not None else 7999
+    pending_limit = TEST_STAGE_ITEM_LIMIT if TEST_STAGE_ITEM_LIMIT is not None else 2147483647
+    urls = target_urls if target_urls is not None else generate_scp_urls(SCP_START, crawl_end)
     logger.info("pipeline.run_start run_id=%s mode=incremental urls=%s", run_id, len(urls))
 
     stage_started = time.monotonic()
@@ -58,7 +80,7 @@ def run_incremental_pipeline(target_urls: list[str] | None = None) -> PipelineRe
     )
 
     stage_started = time.monotonic()
-    extraction_results = process_pending_snapshots(limit=1000)
+    extraction_results = process_pending_snapshots(limit=pending_limit)
     _log_stage_summary(
         StageSummary(
             run_id=run_id,
@@ -72,7 +94,7 @@ def run_incremental_pipeline(target_urls: list[str] | None = None) -> PipelineRe
     )
 
     stage_started = time.monotonic()
-    normalized_count = normalize_pending_mentions(limit=5000)
+    normalized_count = normalize_pending_mentions(limit=pending_limit)
     _log_stage_summary(
         StageSummary(
             run_id=run_id,
@@ -86,7 +108,7 @@ def run_incremental_pipeline(target_urls: list[str] | None = None) -> PipelineRe
     )
 
     stage_started = time.monotonic()
-    geocode_result = process_pending_mentions(limit=5000)
+    geocode_result = process_pending_mentions(limit=pending_limit)
     _log_stage_summary(
         StageSummary(
             run_id=run_id,
@@ -155,8 +177,9 @@ def run_single_document_pipeline(url: str) -> PipelineResult:
 
 
 def run_full_pipeline() -> PipelineResult:
-    logger.info("pipeline.full_mode_start range_start=%s range_end=%s", SCP_START, SCP_END)
-    return run_incremental_pipeline(target_urls=generate_scp_urls(SCP_START, SCP_END))
+    crawl_end = TEST_STAGE_ITEM_LIMIT if TEST_STAGE_ITEM_LIMIT is not None else 7999
+    logger.info("pipeline.full_mode_start range_start=%s range_end=%s", SCP_START, crawl_end)
+    return run_incremental_pipeline(target_urls=generate_scp_urls(SCP_START, crawl_end))
 
 
 def _log_stage_summary(summary: StageSummary) -> None:

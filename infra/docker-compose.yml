@@ -40,9 +40,15 @@ services:
       PYTHONUNBUFFERED: "1"
       DB_RESET_ON_START: "0"
       DB_DROP_TABLES_ON_START: "0"
+      DOCMAP_STAGE_ITEM_LIMIT: 8000
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
+      BIGQUERY_DATASET: ${BIGQUERY_DATASET:-}
+      BIGQUERY_LOCATION: ${BIGQUERY_LOCATION:-}
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
 
     volumes:
       - ..:/app
+      - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
 
     working_dir: /app
 

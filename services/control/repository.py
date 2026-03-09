@@ -8,7 +8,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from services.common.db import get_connection
-from services.control.constants import STAGE_ORDER, STAGES_BY_PIPELINE_TYPE, downstream_stages
+from services.control.constants import STAGE_ORDER, STAGES_BY_PIPELINE_TYPE, downstream_stages, downstream_stages_after
 
 
 class DuplicatePendingCommandError(Exception):
@@ -338,6 +338,34 @@ class ControlRepository:
                     )
             conn.commit()
 
+    def reset_stages_after(self, run_id: int, stage_name: str) -> None:
+        names = downstream_stages_after(stage_name)
+        if not names:
+            return
+        with self._connect() as conn:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE pipeline_stage_runs
+                        SET status = 'pending',
+                            items_total = NULL,
+                            items_completed = 0,
+                            items_failed = 0,
+                            started_at = NULL,
+                            finished_at = NULL,
+                            error_message = NULL,
+                            updated_at = NOW()
+                        WHERE pipeline_run_id = %s AND stage_name = ANY(%s)
+                        """,
+                        (run_id, names),
+                    )
+                    cur.execute(
+                        "DELETE FROM pipeline_progress WHERE pipeline_run_id = %s AND stage_name = ANY(%s)",
+                        (run_id, names),
+                    )
+            conn.commit()
+
     def upsert_progress(
         self,
         run_id: int,
@@ -402,6 +430,32 @@ class ControlRepository:
                     (run_id,),
                 )
                 return list(cur.fetchall())
+
+    def get_progress_entry(self, run_id: int, stage_name: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM pipeline_progress
+                    WHERE pipeline_run_id = %s AND stage_name = %s
+                    """,
+                    (run_id, stage_name),
+                )
+                return cur.fetchone()
+
+    def get_stage_run(self, run_id: int, stage_name: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM pipeline_stage_runs
+                    WHERE pipeline_run_id = %s AND stage_name = %s
+                    """,
+                    (run_id, stage_name),
+                )
+                return cur.fetchone()
 
     def append_log(
         self,
@@ -547,6 +601,26 @@ class ControlRepository:
                 )
                 return bool(cur.fetchone()[0])
 
+    def has_pending_operator_command_for_other_run(self, run_id: int) -> bool:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pipeline_commands
+                        WHERE status IN ('pending', 'accepted')
+                          AND (
+                            pipeline_run_id IS NULL
+                            OR pipeline_run_id <> %s
+                            OR command_type <> 'cancel_run'
+                          )
+                    )
+                    """,
+                    (run_id,),
+                )
+                return bool(cur.fetchone()[0])
+
     def mark_cancel_commands_applied(self, run_id: int) -> None:
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -563,6 +637,25 @@ class ControlRepository:
                     (run_id,),
                 )
             conn.commit()
+
+    def reject_pending_cancel_commands(self, run_id: int, reason: str = "stale cancel command") -> int:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE pipeline_commands
+                    SET status = 'rejected',
+                        processed_at = NOW(),
+                        error_message = %s
+                    WHERE command_type = 'cancel_run'
+                      AND pipeline_run_id = %s
+                      AND status IN ('pending', 'accepted')
+                    """,
+                    (reason, run_id),
+                )
+                updated = int(cur.rowcount or 0)
+            conn.commit()
+        return updated
 
     def get_latest_state_snapshot(self, run_id: int, after_log_id: int = 0) -> dict[str, Any]:
         run = self.get_run(run_id)

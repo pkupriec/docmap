@@ -42,10 +42,17 @@ export default function App() {
   const loadRuns = async () => {
     try {
       const data = await apiGet("/runs");
-      setRuns(data.items || []);
-      if (!selectedRunId && data.items?.length) {
-        setSelectedRunId(data.items[0].id);
-      }
+      const items = data.items || [];
+      setRuns(items);
+      setSelectedRunId((prev) => {
+        if (prev && items.some((run) => run.id === prev)) {
+          return prev;
+        }
+        if (items.length) {
+          return items[0].id;
+        }
+        return null;
+      });
     } catch (e) {
       setError(String(e));
     }
@@ -128,12 +135,13 @@ export default function App() {
   };
 
   const handleCommand = async (path, message) => {
-    if (!selectedRunId) return;
     if (!window.confirm(message)) return;
     try {
       await apiPost(path, {});
       loadRuns();
-      loadRun(selectedRunId);
+      if (runDetail?.run?.id) {
+        loadRun(runDetail.run.id);
+      }
     } catch (e) {
       setError(String(e));
     }
@@ -180,6 +188,10 @@ export default function App() {
           <h2>Run Details</h2>
           {!runDetail ? <div>Select a run</div> : (
             <>
+              {(() => {
+                const detailRunId = runDetail.run.id;
+                return (
+                  <>
               <div className="card">
                 <div>Run ID: {runDetail.run.id}</div>
                 <div>Type: {runDetail.run.pipeline_type}</div>
@@ -192,15 +204,15 @@ export default function App() {
               </div>
 
               <div className="actions">
-                <button onClick={() => handleCommand(`/runs/${selectedRunId}/cancel`, "Cancel this run?")}>Cancel Run</button>
-                <button onClick={() => handleCommand(`/runs/${selectedRunId}/retry`, "Retry this run as a new run?")}>Retry Run</button>
+                <button onClick={() => handleCommand(`/runs/${detailRunId}/cancel`, "Cancel this run?")}>Cancel Run</button>
+                <button onClick={() => handleCommand(`/runs/${detailRunId}/retry`, "Retry this run as a new run?")}>Retry Run</button>
               </div>
 
               <h3>Stages</h3>
               <table>
                 <thead>
                   <tr>
-                    <th>Order</th><th>Stage</th><th>Status</th><th>Done</th><th>Failed</th><th>Started</th><th>Finished</th><th>Retry</th>
+                    <th>Order</th><th>Stage</th><th>Status</th><th>Done</th><th>Failed</th><th>Started</th><th>Finished</th><th>Retry</th><th>Resume</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -213,7 +225,8 @@ export default function App() {
                       <td>{stage.items_failed}</td>
                       <td>{fmt(stage.started_at)}</td>
                       <td>{fmt(stage.finished_at)}</td>
-                      <td><button onClick={() => handleCommand(`/runs/${selectedRunId}/stages/${stage.stage_name}/retry`, `Retry stage ${stage.stage_name} and downstream?`)}>Retry</button></td>
+                      <td><button onClick={() => handleCommand(`/runs/${detailRunId}/stages/${stage.stage_name}/retry`, `Retry stage ${stage.stage_name} and downstream?`)}>Retry</button></td>
+                      <td><button onClick={() => handleCommand(`/runs/${detailRunId}/stages/${stage.stage_name}/resume`, `Resume stage ${stage.stage_name} from saved progress?`)}>Resume</button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -258,6 +271,9 @@ export default function App() {
                   <div key={log.id} className="log-line">[{fmt(log.created_at)}] [{log.level}] [{log.service_name}] [{log.stage_name || "-"}] {log.message}</div>
                 ))}
               </div>
+                  </>
+                );
+              })()}
             </>
           )}
         </section>

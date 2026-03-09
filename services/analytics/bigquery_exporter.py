@@ -22,9 +22,15 @@ def export_all_bi_tables(
     mode: str = "full",
     *,
     on_table: ExportTableCallback | None = None,
+    start_index: int = 0,
 ) -> None:
     logger.info("analytics.bigquery_export_all_start mode=%s", mode)
-    for table_name in ("bi_documents", "bi_locations", "bi_document_locations"):
+    tables = ("bi_documents", "bi_locations", "bi_document_locations")
+    if start_index < 0:
+        start_index = 0
+    if start_index > len(tables):
+        start_index = len(tables)
+    for table_name in tables[start_index:]:
         if on_table:
             on_table(table_name, "started", None)
         try:

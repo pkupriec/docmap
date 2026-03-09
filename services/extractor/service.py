@@ -29,6 +29,7 @@ class ExtractionResult:
 
 
 SnapshotCallback = Callable[[int, int, int, str, ExtractionResult | None, str | None], None]
+StopCallback = Callable[[], bool]
 
 
 def process_snapshot(
@@ -78,16 +79,21 @@ def process_pending_snapshots(
     prompt_version: str = "v1",
     pipeline_version: str = "v1",
     max_retries: int = 3,
+    offset: int = 0,
     on_snapshot: SnapshotCallback | None = None,
+    should_stop: StopCallback | None = None,
 ) -> list[ExtractionResult]:
     with get_connection() as conn:
-        snapshot_ids = get_unprocessed_snapshot_ids(conn, limit=limit)
+        snapshot_ids = get_unprocessed_snapshot_ids(conn, limit=limit, offset=offset)
 
     logger.info("extractor.batch_start snapshots=%s limit=%s", len(snapshot_ids), limit)
     results: list[ExtractionResult] = []
     failed = 0
     total = len(snapshot_ids)
     for idx, snapshot_id in enumerate(snapshot_ids, start=1):
+        if should_stop and should_stop():
+            logger.info("extractor.batch_stop_requested processed=%s total=%s", idx - 1, total)
+            break
         try:
             result = process_snapshot(
                 snapshot_id,
