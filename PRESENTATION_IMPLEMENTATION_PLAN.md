@@ -1,5 +1,16 @@
 # PRESENTATION_IMPLEMENTATION_PLAN.md
 
+
+The presentation layer is delivered as an independent service.
+
+Implementation structure:
+
+- presentation backend
+- presentation frontend
+- dedicated container build
+
+The control plane remains a separate service and must not be used as the runtime host for presentation UI.
+
 ## Phase 0 — Design Hardening
 
 Finalize documentation.
@@ -67,8 +78,8 @@ map modes
 
 Tasks:
 
-Docker container
-Cloud Run deployment
+Docker container for presentation service
+independent deployment configuration
 logging
 performance tuning
 documentation refresh

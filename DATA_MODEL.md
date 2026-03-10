@@ -33,13 +33,26 @@ This document reflects the current SQL schema in:
 ### `document_locations`
 - link table between document and geocoded location
 
-## BI Tables (`implemented`)
-
+### Current BI Tables (`implemented`)
 - `bi_documents`
 - `bi_locations`
 - `bi_document_locations`
 
 These are rebuildable denormalized analytics tables.
+
+### BI Extensions for Presentation Layer (`required for phase11`)
+- `bi_location_hierarchy`
+
+This table is required for the presentation layer hierarchy fallback contract.
+It must be treated as part of the BI projection set used by phase11.
+
+Presentation-driven BI extensions required by phase11 include:
+- document preview fields in `bi_documents`
+- hierarchy support in `bi_locations` and `bi_location_hierarchy`
+- evidence quote support in `bi_document_locations`
+
+The presentation layer must consume BI projections only.
+Operational tables remain the source of truth for extraction/geocoding stages.
 
 ## Control Plane Tables (`implemented`)
 
@@ -71,3 +84,5 @@ Control-plane SQL defines enums/checks for:
 
 - `implemented`: log retention helper function keeps logs for most recent 10 runs
 - `partial`: no explicit schema migration history table; startup migration logic is environment-driven and idempotent where possible
+- `planned`: presentation-oriented BI projections must remain rebuildable from operational tables
+- `planned`: BI schema extensions for presentation must preserve portability toward BigQuery-style analytical storage

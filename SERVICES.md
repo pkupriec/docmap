@@ -8,6 +8,7 @@ This document is authoritative for module ownership and write boundaries.
 - `extractor` (`implemented`): `extraction_runs`, `location_mentions`
 - `geocoder` (`implemented`): `geo_locations`, `document_locations`
 - `analytics` (`implemented`): `bi_documents`, `bi_locations`, `bi_document_locations`
+- `presentation` (`planned`): reads `bi_documents`, `bi_locations`, `bi_document_locations`, `bi_location_hierarchy`; writes nothing
 - `control plane` (`implemented`): `pipeline_runs`, `pipeline_stage_runs`, `pipeline_progress`, `pipeline_logs`, `pipeline_commands`
 
 ## 1) Crawler
@@ -91,3 +92,27 @@ Responsibilities (`implemented`):
 Notable limits:
 - `partial`: no authentication/authorization layer
 - `partial`: no dedicated external queue/broker
+
+## 7) Presentation
+
+Files:
+- `services/presentation/*` or dedicated presentation module tree
+- frontend UI under the repository UI application chosen for phase11
+
+Responsibilities (`planned`):
+- expose read-only API for map/location/document exploration
+- render interactive spatial UI
+- provide location-to-document and document-to-location navigation
+- support hierarchy fallback (`city -> region -> country`)
+- support hover and pinned selection behavior
+
+Behavior:
+- reads BI tables only
+- must not write to any operational or BI table
+- must use portable SQL suitable for PostgreSQL and later BI portability targets
+- must not call crawler, extractor, or geocoder logic directly
+
+Notable limits:
+- `planned`: MVP supports point geometries only
+- `planned`: search is out of scope for MVP
+- `planned`: mobile UX is out of scope for MVP

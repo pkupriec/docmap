@@ -10,6 +10,17 @@ The API must be stateless.
 
 # GET /api/map/locations
 
+Schema: LocationResponse
+
+Fields:
+- location_id
+- name
+- latitude
+- longitude
+- precision
+- document_count
+- parent_location_id (optional in response if needed by client)
+
 Returns all visible locations.
 
 Response:
@@ -29,17 +40,44 @@ Response:
 
 # GET /api/map/location/{id}/documents
 
+Schema: DocumentCard
+
+Fields:
+- document_id
+- scp_object_id
+- title
+- url
+- preview_text
+- evidence_quote (optional)
+
 Returns documents linked to a location.
 
 ---
 
 # GET /api/map/document/{id}/locations
 
+Schema: DocumentLocationLink
+
+Fields:
+- document_id
+- location_id
+- latitude
+- longitude
+- precision
+- evidence_quote (optional)
+
 Returns locations referenced by a document.
 
 ---
 
 # GET /api/map/overlays/density
+
+Schema: DensityPoint
+
+Fields:
+- latitude
+- longitude
+- document_count
 
 Returns density grid.
 
@@ -54,3 +92,12 @@ All endpoints must:
 be read-only
 use SQL standard queries
 return deterministic results
+All SQL used by API endpoints must follow portable SQL rules.
+
+Queries should remain compatible with:
+- PostgreSQL
+- BigQuery
+- DuckDB
+
+Avoid PostGIS-only API query semantics.
+Return coordinates as latitude/longitude fields in API responses.

@@ -50,17 +50,21 @@ Document-Location Mapping
 ↓
 BI Tables
 ↓
-BigQuery Export
+Presentation Layer
 ↓
-Looker Studio Map
+Interactive Spatial Map UI
 
 
 The pipeline architecture is described in:
 
-
+DOMAIN_CONTEXT.md
 ARCHITECTURE.md
 PIPELINE.md
 SERVICES.md
+PRESENTATION_ARCHITECTURE.md
+PRESENTATION_DATA_CONTRACT.md
+PRESENTATION_UX_SPEC.md
+PRESENTATION_API_SPEC.md
 
 
 The agent must read these files before implementing code.
@@ -69,14 +73,16 @@ The agent must read these files before implementing code.
 
 # Service Architecture
 
-The system consists of five logical services.
-
+The system consists of the following logical services.
 
 crawler
 extractor
 geocoder
 pipeline
-analytics exporter
+analytics
+bigquery exporter
+control plane
+presentation layer
 
 
 Responsibilities are defined in:
@@ -112,8 +118,26 @@ extractor | extraction_runs, location_mentions |
 geocoder | geo_locations, document_locations |
 analytics | bi_* tables |
 
+Presentation layer reads only BI tables and must not write to any table.
+
+The presentation layer must not modify:
+- operational tables
+- BI tables
+- control plane tables
+
 Services must not write outside their domain tables.
 
+# Presentation Layer Rules
+
+The presentation layer must follow these rules:
+
+1. Use BI tables only as input.
+2. Do not call extraction, normalization, or geocoding services directly.
+3. Use portable SQL suitable for future analytical storage portability.
+4. Implement MVP with point geometries only.
+5. Implement hierarchy fallback in BI/API logic.
+6. Do not implement search in MVP unless explicitly reopened by the user.
+7. Keep the UI desktop-first in MVP.
 ---
 
 # Development Strategy
@@ -137,7 +161,8 @@ phase6_analytics
 phase7_bigquery
 phase8_scheduler
 phase9_pipeline_hardening
-
+phase10_control_plane
+phase11_presentation_layer
 
 The agent must execute phases sequentially.
 

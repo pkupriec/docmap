@@ -34,6 +34,18 @@ density overlays
 
 ---
 
+# Precision Awareness
+
+Location precision is part of the data contract.
+
+In MVP, precision does not require separate user controls, but it may influence:
+- marker styling
+- future clustering behavior
+- future visual differentiation of location granularity
+
+The frontend must preserve the precision field in its internal models.
+It must not invent precision values.
+
 # Interaction Model
 
 Two interaction states:
@@ -42,6 +54,32 @@ hover
 pinned selection
 
 ---
+
+# UI State Machine
+
+The MVP UI uses these states:
+
+idle
+hover_location
+pinned_location
+document_hover
+loading
+error
+
+Transitions:
+
+idle -> hover_location
+hover_location -> idle
+hover_location -> pinned_location
+pinned_location -> idle
+pinned_location -> document_hover
+document_hover -> pinned_location
+any -> loading
+loading -> previous stable state
+any -> error
+
+Hover state is transient.
+Pinned state is explicit and must remain stable until reset.
 
 # Hover
 

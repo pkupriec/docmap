@@ -1,175 +1,304 @@
-# PRESENTATION_ARCHITECTURE.md
+# PRESENTATION_EXECUTION_RULES.md
 
-## Purpose
+This document defines strict execution rules for implementing the presentation layer.
 
-The presentation layer provides an interactive spatial interface for exploring SCP knowledge extracted by the processing pipeline.
+The agent must follow these rules exactly.
 
-The interface allows users to explore SCP documents and entities through geographic navigation.
+The presentation layer is an **independent read-only visualization service**.
 
-The presentation layer is a **read-only consumer** of the structured data produced by the processing pipeline.
+It consumes BI projections and exposes an interactive map-based interface.
 
-It does not perform extraction, normalization, or geocoding.
-
----
-
-# Architectural Position
-
-System layers:
-
-crawler
-→ extractor
-→ geocoder
-→ pipeline
-→ database (operational tables)
-→ BI projections (bi_* tables)
-→ presentation layer
-
-The presentation layer reads **only BI tables**.
+The agent must not redesign the architecture.
 
 ---
 
-# Responsibilities
+# Authoritative Documents
 
-The presentation layer is responsible for:
+Before writing any code the agent MUST read these documents in this order:
 
-- rendering an interactive geographic interface
-- presenting SCP documents linked to locations
-- supporting spatial navigation
-- visualizing relationships between documents and locations
-- exposing a user-facing UI and API
+1. EXECUTION_SPEC.md
+2. ARCHITECTURE.md
+3. DATA_MODEL.md
+4. SERVICES.md
+5. PIPELINE.md
+6. PRESENTATION_ARCHITECTURE.md
+7. PRESENTATION_DATA_CONTRACT.md
+8. PRESENTATION_UX_SPEC.md
+9. PRESENTATION_API_SPEC.md
+10. PRESENTATION_IMPLEMENTATION_PLAN.md
+11. TASKS/phase11_presentation_layer.md
 
-The presentation layer must NOT:
+These documents define the architecture.
 
-- modify operational tables
-- modify BI tables
-- perform data extraction
-- perform entity normalization
-- perform geocoding
-
----
-
-# Service Model
-
-The presentation layer is implemented as a standalone service.
-
-Deployment model:
-
-containerized service
-
-Example deployment targets:
-
-- GCP Cloud Run
-- GCE VM
-- Kubernetes
+If conflicts appear, the order above defines priority.
 
 ---
 
-# Data Source
+# Architectural Role
 
-The presentation layer reads from:
+The presentation layer:
 
-bi_documents
-bi_locations
-bi_document_locations
-bi_location_hierarchy
+reads BI tables  
+exposes a read-only API  
+renders the spatial UI
 
-These tables are considered **stable BI projections**.
+It does NOT:
 
-The presentation layer must treat them as read-only.
+run pipeline logic  
+modify operational tables  
+modify BI tables  
+perform extraction or geocoding  
 
 ---
 
-# SQL Requirements
+# UI Stack (Authoritative)
 
-All queries must follow standard SQL compatible with:
+The presentation UI must use the following stack:
 
-PostgreSQL
-BigQuery
-DuckDB
+React  
+Vite  
+TypeScript  
+MapLibre GL JS  
+deck.gl  
 
-Avoid vendor-specific extensions.
+This stack applies to the dedicated presentation frontend application.
 
-Spatial coordinates must be represented as:
+The presentation frontend is separate from the control plane frontend and must be built and deployed independently as part of the presentation service container.
 
-latitude
+It must not replace the frontend with another framework.
+
+Do not introduce alternative frameworks.
+
+Do not replace the existing UI stack with:
+
+Next.js  
+Angular  
+Vue  
+Svelte  
+
+unless explicitly instructed by the user.
+
+---
+
+# Frontend Module Layout
+
+The presentation layer must be implemented as a separate frontend application.
+
+It must NOT be merged into the control plane UI.
+
+Recommended repository structure:
+
+- `services/presentation/frontend/`
+- `services/presentation/backend/`
+
+Recommended frontend structure inside `services/presentation/frontend/src/`:
+
+- `components/`
+- `map/`
+- `api/`
+- `state/`
+- `views/`
+
+The presentation frontend may reuse shared patterns or utility code only if explicitly extracted into a neutral shared module.
+
+It must not depend directly on control plane UI internals.
+
+The agent must not replace or restructure the control plane UI while implementing the presentation layer.
+
+
+# Frontend Replacement Prohibition
+
+The agent must NOT replace the entire frontend architecture.
+
+Specifically forbidden actions:
+
+removing the existing `ui/` application  
+replacing Vite with a different bundler  
+introducing server-rendered frameworks  
+
+The presentation layer must extend the existing UI structure.
+
+---
+
+# Geometry Rules
+
+MVP supports **point geometries only**.
+
+Allowed fields:
+
+latitude  
+longitude  
+
+The agent must NOT implement:
+
+polygons  
+multi-polygons  
+uncertainty radii  
+
+These features may appear later but are not part of this phase.
+
+---
+
+# Search Rules
+
+Search is **not part of MVP**.
+
+The agent must NOT implement:
+
+full-text search  
+document search  
+entity search  
+
+unless explicitly instructed by the user.
+
+Spatial navigation is the only discovery mechanism.
+
+---
+
+# SQL Portability Rules
+
+All queries must be portable.
+
+The agent must write SQL compatible with:
+
+PostgreSQL  
+BigQuery  
+DuckDB  
+
+Avoid:
+
+database-specific extensions  
+PostGIS-only features in API queries  
+
+Coordinates must be returned as:
+
+latitude  
 longitude
 
-Not PostGIS geometry types in the API layer.
+not geometry blobs.
 
 ---
 
-# Data Flow
+# BI Table Access
 
-Database (BI tables)
-→ Presentation API
-→ Frontend UI
-→ Map rendering engine
+The presentation layer reads only:
 
----
+bi_documents  
+bi_locations  
+bi_document_locations  
+bi_location_hierarchy  
 
-# Technology Stack
+The agent must not write to these tables.
 
-Frontend:
-
-Next.js
-TypeScript
-MapLibre GL JS
-deck.gl
-
-Backend:
-
-Python
-FastAPI
-
-Database access:
-
-read-only SQL queries
+All BI tables are considered **immutable inputs**.
 
 ---
 
-# Service Boundaries
+# Hierarchy Logic
 
-The presentation service does not interact with:
+Location hierarchy must support fallback:
 
-crawler
-extractor
-geocoder
+city → region → country
 
-It only consumes their results.
+Hierarchy information comes from:
 
----
+bi_location_hierarchy
 
-# Determinism
+The agent must not compute hierarchy heuristically in the frontend.
 
-The presentation layer must not alter the meaning of extracted data.
-
-The UI is a visualization of existing structured data.
-
-All queries must produce deterministic results given identical BI tables.
+Hierarchy resolution must occur in the API layer.
 
 ---
 
-# Extensibility
+# Deterministic Behavior
 
-The architecture must allow future additions:
+The presentation layer must remain deterministic.
 
-polygon geometries
-density overlays
-weather layers
-custom visual layers
-search
+Given identical BI tables:
 
-These features must not require architectural changes.
+API responses must remain identical.
+
+The agent must not introduce:
+
+random ordering  
+non-deterministic queries  
+time-dependent logic  
 
 ---
 
-# Non Goals
+# Performance Targets
 
-The presentation layer will not:
+The implementation must support at least:
 
-edit SCP data
-store user data
-implement authentication
-run multiple processing pipelines
+5000 locations  
+50000 document-location links  
+50000 documents  
 
-These capabilities are outside scope.
+Hover interaction must remain under:
+
+100 ms latency.
+
+---
+
+# UX Interaction Rules
+
+The UI must implement two states:
+
+hover  
+pinned selection  
+
+Behavior:
+
+hover → preview documents  
+click → pin selection  
+Esc → reset  
+click empty map → reset  
+
+Document cards must:
+
+display preview text  
+open source document in new browser tab.
+
+---
+
+# Forbidden Architecture Changes
+
+The agent must not introduce:
+
+message brokers  
+task queues  
+background workers  
+microservice splits  
+data mutation pipelines  
+
+The presentation layer is a **single read-only service**.
+
+---
+
+# Development Strategy
+
+The agent must implement in this order:
+
+1. BI schema adjustments
+2. presentation API
+3. UI shell
+4. map rendering
+5. hover/pin logic
+6. document cards
+7. map-to-panel synchronization
+8. tests
+9. documentation updates
+
+---
+
+# Success Criteria
+
+The implementation is considered complete when:
+
+the UI renders map locations  
+hover shows documents  
+click pins selection  
+document cards display preview text  
+links open SCP source pages  
+API reads BI tables only  
+no writes occur in the presentation service
