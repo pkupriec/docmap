@@ -58,6 +58,18 @@ Command queue type is `retry_stage|retry_run|start_run|cancel_run`.
   - `OLLAMA_THINK_LEVEL` (default `low`)
   - `OLLAMA_NUM_PREDICT` (optional cap)
 
+## Geocode Progress Semantics
+
+- `implemented`: geocode stage may process only up to `DOCMAP_STAGE_ITEM_LIMIT` per run.
+- `implemented`: UI/API `total_items` for geocode reflects real pending backlog at stage start, while logs include the per-run processing limit.
+- `implemented`: normalization sub-step now honors the same per-run limit instead of scanning full backlog when limit is set.
+
+## Transaction Semantics
+
+- `implemented`: extractor commits per snapshot (atomic item).
+- `implemented`: geocoder commits per mention (atomic item).
+- benefit: long runs persist progress incrementally and isolate failures to individual items.
+
 ## Scheduler
 
 - Module `services/pipeline/scheduler.py` exists (`implemented`)

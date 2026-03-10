@@ -57,6 +57,14 @@ Control flow:
 - `implemented`: cancel requests are soft and applied at boundaries
 - `partial`: operational robustness around external outages depends on environment reliability
 
+## Transaction Pattern
+
+- `implemented`: services should commit by atomic unit of work where practical.
+- Current pattern:
+  - extractor commits per snapshot
+  - geocoder commits per mention
+- rationale: improve durability/observability during long-running stages and limit rollback scope on single-item failures
+
 ## Deployment Model
 
 - `implemented`: local Docker Compose topology:

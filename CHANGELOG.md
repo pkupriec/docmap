@@ -24,6 +24,19 @@ All notable repository-level changes are documented here.
   - `idx_document_snapshots_created_at_id`
   - `uq_document_locations_mention_id` (unique partial index)
 
+### Geocoding
+
+- Added Nominatim resilience improvements:
+  - request throttling via `GEOCODER_MIN_INTERVAL_SECONDS`
+  - 429-aware backoff (uses `Retry-After` when present)
+  - fallback query variants for over-specific place names
+- Geocoder now treats exhausted Nominatim retries as unresolved (`None`) instead of raising hard stage exceptions.
+- Geocoder transaction granularity changed to atomic per mention (commit/rollback per item).
+- Geocode stage progress semantics aligned:
+  - `total_items` reflects pending backlog context
+  - per-run processing still respects configured stage item limit
+  - normalization sub-step now respects the same per-run limit
+
 ### Documentation
 
 - Rewrote root architecture/project docs to match current code and schema:

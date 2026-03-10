@@ -54,6 +54,8 @@ Responsibilities (`implemented`):
 Behavior:
 - unresolved/invalid items are logged and skipped
 - supports callback + stop boundary control
+- Nominatim access is rate-limit aware (request throttling + 429 backoff + query fallbacks)
+- transaction unit is one mention: each mention is committed independently (rollback only for failed item)
 
 ## 4) Analytics
 

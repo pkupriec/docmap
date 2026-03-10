@@ -86,6 +86,23 @@ Action:
 - restart app container after env changes:
   `docker compose -f infra/docker-compose.yml restart app`
 
+### Geocoder shows many unresolved or 429 responses
+
+Cause: public Nominatim rate limiting and/or overly specific location strings.
+
+Action:
+- verify geocoder env settings:
+  - `GEOCODER_MIN_INTERVAL_SECONDS`
+  - `GEOCODER_USER_AGENT`
+  - `GEOCODER_URL`
+- inspect geocoder logs for:
+  - `geocoder.nominatim_rate_limited`
+  - `geocoder.nominatim_not_found`
+  - fallback query behavior (`query=...`)
+- note geocode progress semantics:
+  - `total_items` reflects backlog context
+  - stage may still process only configured per-run limit
+
 ## Data Safety Notes
 
 - `implemented`: control logs are pruned to last 10 runs

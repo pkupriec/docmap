@@ -12,6 +12,8 @@ Build a reproducible pipeline that maps SCP documents to real-world locations re
   - model/tuning controls are env-configurable (`EXTRACTOR_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_THINK_LEVEL`, `OLLAMA_NUM_PREDICT`)
   - extraction prompt includes stricter anti-hallucination and normalization guidance
 - `implemented`: geocoding via Nominatim + cache in `geo_locations`
+  - request pacing and 429 handling are built in for public Nominatim usage
+  - per-mention commit semantics improve durability for long geocode runs
 - `implemented`: BI table rebuild in Postgres (`bi_*`)
 - `implemented`: BigQuery export (full + incremental merge modes)
 - `implemented`: control plane API + UI + SSE monitoring
