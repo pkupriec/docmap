@@ -15,6 +15,9 @@ This document describes runtime configuration for the current implementation.
   - used by `services/common/db.py`
 - `OLLAMA_HOST` (`implemented`, optional with default)
   - default in code: `http://localhost:11434`
+- `OLLAMA_TIMEOUT_SECONDS` (`implemented`, optional with default)
+  - default in code: `300`
+  - invalid or non-positive values fall back to default
 - `LOG_LEVEL` (`implemented`)
 - `PYTHONUNBUFFERED` (`implemented`)
 

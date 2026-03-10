@@ -49,3 +49,16 @@ def test_filter_unprocessed_urls_delegates_to_repository(monkeypatch: pytest.Mon
     filtered = service.filter_unprocessed_urls(urls, include_missing_pdf=True)
 
     assert filtered == ["https://scp-wiki.wikidot.com/scp-002"]
+
+
+def test_render_pdf_with_fallback_uses_text_renderer_after_primary_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service, "render_pdf_blob", lambda _url: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(service, "render_pdf_blob_from_text", lambda text, title=None: b"%PDF-fallback")
+
+    result = service._render_pdf_with_fallback(
+        "https://scp-wiki.wikidot.com/scp-173",
+        "SCP-173",
+        "Fallback text",
+    )
+
+    assert result == b"%PDF-fallback"

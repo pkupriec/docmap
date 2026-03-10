@@ -7,7 +7,7 @@ from typing import Callable
 from services.common.db import get_connection
 from services.crawler.downloader import RequestThrottler, download_page
 from services.crawler.parser import extract_clean_text, extract_title
-from services.crawler.pdf_renderer import render_pdf_blob
+from services.crawler.pdf_renderer import render_pdf_blob, render_pdf_blob_from_text
 from services.crawler.repository import (
     canonical_number_from_url,
     filter_unprocessed_urls as filter_unprocessed_urls_in_db,
@@ -52,6 +52,14 @@ def filter_unprocessed_urls(
         return filter_unprocessed_urls_in_db(conn, urls, include_missing_pdf=include_missing_pdf)
 
 
+def _render_pdf_with_fallback(url: str, title: str | None, clean_text: str) -> bytes:
+    try:
+        return render_pdf_blob(url)
+    except Exception as primary_exc:
+        logger.warning("crawler.pdf_render_primary_failed url=%s error=%s", url, primary_exc)
+    return render_pdf_blob_from_text(clean_text, title=title or url)
+
+
 def process_document(
     url: str,
     *,
@@ -94,7 +102,7 @@ def process_document(
 
         if created:
             try:
-                pdf_blob = render_pdf_blob(url)
+                pdf_blob = _render_pdf_with_fallback(url, title, clean_text)
                 if snapshot_id:
                     set_snapshot_pdf_blob(conn, snapshot_id, pdf_blob)
             except Exception as exc:
@@ -109,7 +117,7 @@ def process_document(
             missing_pdf_snapshot_id = get_latest_snapshot_missing_pdf(conn, document_id)
             if missing_pdf_snapshot_id:
                 try:
-                    pdf_blob = render_pdf_blob(url)
+                    pdf_blob = _render_pdf_with_fallback(url, title, clean_text)
                     set_snapshot_pdf_blob(conn, missing_pdf_snapshot_id, pdf_blob)
                     logger.info(
                         "crawler.snapshot_pdf_backfilled url=%s snapshot_id=%s",
