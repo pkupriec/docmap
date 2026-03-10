@@ -26,6 +26,7 @@ Control flow:
 
 - `crawler`: fetch + parse + snapshot persistence
 - `extractor`: prompt build, LLM call, validation, mention persistence
+  - extractor runtime knobs: `EXTRACTOR_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_THINK_LEVEL`, `OLLAMA_NUM_PREDICT`
 - `geocoder`: resolve normalized names, cache, link documents
 - `analytics`: rebuild BI tables
 - `bigquery_exporter`: export BI tables to BigQuery

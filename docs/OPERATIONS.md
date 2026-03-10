@@ -72,6 +72,20 @@ Action:
 - inspect active run state in UI
 - if needed, restart `app` and recheck command transitions
 
+### Extraction is very slow or hits Ollama timeouts
+
+Cause: long LLM generation time for selected model/prompt complexity.
+
+Action:
+- check extractor/Ollama timing logs in app output (`extractor.ollama_request_success` fields)
+- tune extractor env vars:
+  - `EXTRACTOR_MODEL` (for example `gpt-oss:20b` for higher throughput)
+  - `OLLAMA_THINK_LEVEL` (default `low`)
+  - `OLLAMA_TIMEOUT_SECONDS` (increase only if needed)
+  - `OLLAMA_NUM_PREDICT` (optional output cap)
+- restart app container after env changes:
+  `docker compose -f infra/docker-compose.yml restart app`
+
 ## Data Safety Notes
 
 - `implemented`: control logs are pruned to last 10 runs

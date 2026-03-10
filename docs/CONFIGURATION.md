@@ -18,6 +18,15 @@ This document describes runtime configuration for the current implementation.
 - `OLLAMA_TIMEOUT_SECONDS` (`implemented`, optional with default)
   - default in code: `300`
   - invalid or non-positive values fall back to default
+- `OLLAMA_THINK_LEVEL` (`implemented`, optional with default)
+  - allowed: `low`, `medium`, `high`
+  - default in code: `low`
+- `OLLAMA_NUM_PREDICT` (`implemented`, optional)
+  - unset/empty/`0` -> model default
+  - positive integer -> token cap for generated output
+- `EXTRACTOR_MODEL` (`implemented`, optional with default)
+  - default in code: `gpt-oss:20b`
+  - set to a larger model (for example `gpt-oss:120b`) when you need higher quality at lower throughput
 - `LOG_LEVEL` (`implemented`)
 - `PYTHONUNBUFFERED` (`implemented`)
 

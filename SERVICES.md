@@ -38,6 +38,8 @@ Responsibilities (`implemented`):
 Behavior:
 - retries malformed/transient failures
 - supports callback + stop boundary control
+- model/runtime tuning is configurable via env (`EXTRACTOR_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_THINK_LEVEL`, `OLLAMA_NUM_PREDICT`)
+- prompt contains anti-hallucination, canonical normalization, and deduplication guidance
 
 ## 3) Geocoder
 

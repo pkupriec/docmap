@@ -1,4 +1,4 @@
-# Phase 3 — LLM Extraction
+# Phase 3 - LLM Extraction
 
 Goal: extract geographic mentions.
 
@@ -6,15 +6,16 @@ Tasks:
 
 3.1 Create extractor service
 
-services/extractor/
+`services/extractor/`
 
 ---
 
 3.2 Connect to Ollama API
 
-Support models:
+Support configurable model selection:
 
-gpt-oss:120b
+- default: `gpt-oss:20b`
+- configurable: `EXTRACTOR_MODEL`
 
 ---
 
@@ -22,7 +23,7 @@ gpt-oss:120b
 
 Task:
 
-extract geographic mentions.
+extract geographic mentions with anti-hallucination guidance.
 
 ---
 
@@ -40,6 +41,8 @@ extract geographic mentions.
 
 3.7 Insert location_mentions
 
+Include `confidence` per mention.
+
 ---
 
 3.8 Handle invalid JSON responses
@@ -49,3 +52,5 @@ Retry extraction.
 ---
 
 3.9 Add extraction logging
+
+Include request/response timing diagnostics for Ollama calls.

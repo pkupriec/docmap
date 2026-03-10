@@ -4,6 +4,21 @@ All notable repository-level changes are documented here.
 
 ## [Unreleased]
 
+### Extraction
+
+- Added Ollama timeout + generation tuning controls:
+  - `OLLAMA_TIMEOUT_SECONDS`
+  - `OLLAMA_THINK_LEVEL`
+  - `OLLAMA_NUM_PREDICT`
+- Added extractor model selection via `EXTRACTOR_MODEL` (default `gpt-oss:20b`).
+- Extended extractor Ollama success logging with timing/token metadata for performance diagnostics.
+- Hardened extraction prompt (`services/extractor/prompts/location_extraction_prompt.md`) with:
+  - anti-hallucination constraints
+  - stricter normalization/canonicalization guidance
+  - precision/confidence guidance
+  - deduplication rules
+  - few-shot examples
+
 ### Documentation
 
 - Rewrote root architecture/project docs to match current code and schema:

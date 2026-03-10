@@ -9,6 +9,8 @@ Build a reproducible pipeline that maps SCP documents to real-world locations re
 - `implemented`: document crawl from SCP Wiki canonical URLs (`scp-001`..`scp-7999`)
 - `implemented`: immutable-like snapshot history (`document_snapshots`) with `raw_html`, `clean_text`, `pdf_blob`
 - `implemented`: LLM extraction via Ollama endpoint (`services/extractor/ollama_client.py`)
+  - model/tuning controls are env-configurable (`EXTRACTOR_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_THINK_LEVEL`, `OLLAMA_NUM_PREDICT`)
+  - extraction prompt includes stricter anti-hallucination and normalization guidance
 - `implemented`: geocoding via Nominatim + cache in `geo_locations`
 - `implemented`: BI table rebuild in Postgres (`bi_*`)
 - `implemented`: BigQuery export (full + incremental merge modes)

@@ -24,6 +24,17 @@ Services:
 4. Inspect logs:
    `docker compose -f infra/docker-compose.yml logs -f app`
 
+## Extractor Tuning During Development
+
+Useful env vars in `infra/docker-compose.yml` / `.env`:
+- `EXTRACTOR_MODEL`
+- `OLLAMA_TIMEOUT_SECONDS`
+- `OLLAMA_THINK_LEVEL`
+- `OLLAMA_NUM_PREDICT`
+
+Prompt file used by extraction:
+- `services/extractor/prompts/location_extraction_prompt.md`
+
 ## Tests
 
 Run tests inside app container:

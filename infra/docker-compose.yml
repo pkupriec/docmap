@@ -37,6 +37,9 @@ services:
       DATABASE_URL: postgresql://docmap:docmap@postgres:5432/docmap
       OLLAMA_HOST: http://host.docker.internal:11434
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-300}
+      OLLAMA_THINK_LEVEL: ${OLLAMA_THINK_LEVEL:-low}
+      OLLAMA_NUM_PREDICT: ${OLLAMA_NUM_PREDICT:-}
+      EXTRACTOR_MODEL: ${EXTRACTOR_MODEL:-gpt-oss:20b}
       LOG_LEVEL: INFO
       PYTHONUNBUFFERED: "1"
       DB_RESET_ON_START: "0"

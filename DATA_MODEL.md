@@ -24,6 +24,7 @@ This document reflects the current SQL schema in:
 
 ### `location_mentions`
 - extracted mentions from LLM output
+- includes `mention_text`, `normalized_location`, `precision`, `relation_type`, `confidence`, `evidence_quote`
 
 ### `geo_locations`
 - resolved normalized locations + PostGIS geography point

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -19,6 +20,7 @@ from services.extractor.validator import parse_extraction_json, validate_extract
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_EXTRACTOR_MODEL = os.getenv("EXTRACTOR_MODEL", "gpt-oss:20b")
 
 
 @dataclass(frozen=True)
@@ -35,7 +37,7 @@ StopCallback = Callable[[], bool]
 def process_snapshot(
     snapshot_id: str,
     *,
-    model: str = "gpt-oss:120b",
+    model: str = DEFAULT_EXTRACTOR_MODEL,
     prompt_version: str = "v1",
     pipeline_version: str = "v1",
     max_retries: int = 3,
@@ -75,7 +77,7 @@ def process_snapshot(
 def process_pending_snapshots(
     *,
     limit: int = 100,
-    model: str = "gpt-oss:120b",
+    model: str = DEFAULT_EXTRACTOR_MODEL,
     prompt_version: str = "v1",
     pipeline_version: str = "v1",
     max_retries: int = 3,

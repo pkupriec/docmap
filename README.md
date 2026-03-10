@@ -24,6 +24,15 @@ DocMap is an operator-driven data pipeline for SCP Wiki documents:
    - Control UI: `http://localhost:5173`
    - pgAdmin: `http://localhost:5050`
 
+## Extraction Runtime Tuning
+
+Extractor/Ollama behavior is configurable via env vars (see `docs/CONFIGURATION.md`):
+
+- `EXTRACTOR_MODEL` (default `gpt-oss:20b`)
+- `OLLAMA_TIMEOUT_SECONDS` (default `300`)
+- `OLLAMA_THINK_LEVEL` (default `low`)
+- `OLLAMA_NUM_PREDICT` (optional output token cap)
+
 ## Key Entry Points
 
 - App entrypoint: `main.py`

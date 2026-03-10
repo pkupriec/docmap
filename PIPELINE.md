@@ -52,6 +52,11 @@ Command queue type is `retry_stage|retry_run|start_run|cancel_run`.
   - `""`, `all`, `0` -> no logical limit
   - positive integer -> explicit limit
 - Current compose sets `DOCMAP_STAGE_ITEM_LIMIT: 8000` (`implemented` runtime default in local stack)
+- Extract stage LLM tuning vars:
+  - `EXTRACTOR_MODEL` (default `gpt-oss:20b`)
+  - `OLLAMA_TIMEOUT_SECONDS` (default `300`)
+  - `OLLAMA_THINK_LEVEL` (default `low`)
+  - `OLLAMA_NUM_PREDICT` (optional cap)
 
 ## Scheduler
 

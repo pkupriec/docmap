@@ -23,6 +23,10 @@ Scope limits:
 4. Create `.env.example` with:
    - `DATABASE_URL=postgresql://docmap:docmap@postgres:5432/docmap`
    - `OLLAMA_HOST=http://host.docker.internal:11434`
+   - `OLLAMA_TIMEOUT_SECONDS=300`
+   - `OLLAMA_THINK_LEVEL=low`
+   - `OLLAMA_NUM_PREDICT=`
+   - `EXTRACTOR_MODEL=gpt-oss:20b`
    - `GEOCODER_URL=https://nominatim.openstreetmap.org`
 5. Implement `services/common/logging.py` with a shared `configure_logging()` helper.
 6. Implement `services/common/db.py` using `DATABASE_URL`.

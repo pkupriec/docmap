@@ -21,6 +21,10 @@ Top-level structure and current role.
   - URL generation, download, parsing, snapshot persistence
 - `extractor/`
   - prompting, LLM call, validation, persistence
+  - key files:
+    - `prompt_builder.py`
+    - `ollama_client.py`
+    - `prompts/location_extraction_prompt.md`
 - `geocoder/`
   - normalization, geocode client/repository/service
 - `analytics/`

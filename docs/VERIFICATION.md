@@ -32,6 +32,7 @@ This guide defines concrete checks for documentation/code consistency.
 ### Runtime config
 
 - `infra/docker-compose.yml` includes app/postgres/control-ui/pgadmin (`implemented`).
+- Extractor/Ollama tuning env vars are present (`EXTRACTOR_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_THINK_LEVEL`, `OLLAMA_NUM_PREDICT`).
 - BigQuery env values are present but empty by default (`partial until operator config`).
 
 ### Service/module layout
