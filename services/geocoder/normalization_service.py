@@ -17,11 +17,12 @@ def normalize_pending_mentions(
     invalid_threshold: int = 5,
     on_progress: NormalizeCallback | None = None,
 ) -> int:
-    logger.info("geocoder.normalize_batch_start batch_size=%s", limit)
+    logger.info("geocoder.normalize_batch_start limit=%s", limit)
     with get_connection() as conn:
         updated = _normalize_pending_mentions(
             conn,
-            batch_size=limit,
+            batch_size=min(max(limit, 1), 1000),
+            max_items=limit,
             invalid_threshold=invalid_threshold,
             on_progress=on_progress,
         )
@@ -33,14 +34,25 @@ def _normalize_pending_mentions(
     conn: Connection,
     *,
     batch_size: int,
+    max_items: int | None,
     invalid_threshold: int,
     on_progress: NormalizeCallback | None = None,
 ) -> int:
     updated_count = 0
     invalid_count = 0
     offset = 0
+    scanned_total = 0
 
     while True:
+        if max_items is not None and scanned_total >= max_items:
+            break
+        fetch_limit = batch_size
+        if max_items is not None:
+            remaining = max_items - scanned_total
+            if remaining <= 0:
+                break
+            fetch_limit = min(fetch_limit, remaining)
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -51,13 +63,14 @@ def _normalize_pending_mentions(
                 ORDER BY id
                 LIMIT %s OFFSET %s
                 """,
-                (batch_size, offset),
+                (fetch_limit, offset),
             )
             rows = cur.fetchall()
         if not rows:
             break
 
         logger.info("geocoder.normalize_candidates_loaded count=%s offset=%s", len(rows), offset)
+        scanned_total += len(rows)
         offset += len(rows)
 
         updates: list[tuple[str, str]] = []
@@ -82,7 +95,7 @@ def _normalize_pending_mentions(
 
         if not updates:
             if on_progress:
-                on_progress(offset, updated_count, invalid_count)
+                on_progress(scanned_total, updated_count, invalid_count)
             continue
 
         with conn.cursor() as cur:
@@ -98,10 +111,10 @@ def _normalize_pending_mentions(
         updated_count += len(updates)
         logger.info("geocoder.normalize_applied updates=%s total_updates=%s", len(updates), updated_count)
         if on_progress:
-            on_progress(offset, updated_count, invalid_count)
+            on_progress(scanned_total, updated_count, invalid_count)
 
-    if updated_count == 0:
+    if scanned_total == 0:
         logger.info("geocoder.normalize_no_changes")
         if on_progress:
-            on_progress(offset, updated_count, invalid_count)
+            on_progress(0, updated_count, invalid_count)
     return updated_count

@@ -18,6 +18,11 @@ All notable repository-level changes are documented here.
   - precision/confidence guidance
   - deduplication rules
   - few-shot examples
+- Added DB index/migration hardening for extraction/geocoding query paths:
+  - `uq_extraction_runs_snapshot_id` (unique by snapshot)
+  - `idx_document_snapshots_document_created_desc`
+  - `idx_document_snapshots_created_at_id`
+  - `uq_document_locations_mention_id` (unique partial index)
 
 ### Documentation
 

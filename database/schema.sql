@@ -42,6 +42,12 @@ CREATE TABLE document_snapshots (
 CREATE INDEX idx_snapshots_document
 ON document_snapshots(document_id);
 
+CREATE INDEX idx_document_snapshots_document_created_desc
+ON document_snapshots(document_id, created_at DESC);
+
+CREATE INDEX idx_document_snapshots_created_at_id
+ON document_snapshots(created_at, id);
+
 -- =====================================================
 -- EXTRACTION RUNS
 -- =====================================================
@@ -55,7 +61,7 @@ CREATE TABLE extraction_runs (
     created_at TIMESTAMP DEFAULT now()
 );
 
-CREATE INDEX idx_extraction_runs_snapshot
+CREATE UNIQUE INDEX uq_extraction_runs_snapshot_id
 ON extraction_runs(snapshot_id);
 
 -- =====================================================
@@ -114,6 +120,10 @@ ON document_locations(document_id);
 
 CREATE INDEX idx_doc_locations_location
 ON document_locations(location_id);
+
+CREATE UNIQUE INDEX uq_document_locations_mention_id
+ON document_locations(mention_id)
+WHERE mention_id IS NOT NULL;
 
 -- =====================================================
 -- BI TABLES

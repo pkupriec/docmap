@@ -29,6 +29,13 @@ This document describes runtime configuration for the current implementation.
   - set to a larger model (for example `gpt-oss:120b`) when you need higher quality at lower throughput
 - `LOG_LEVEL` (`implemented`)
 - `PYTHONUNBUFFERED` (`implemented`)
+- `GEOCODER_URL` (`implemented`, optional with default)
+  - default in code: `https://nominatim.openstreetmap.org`
+- `GEOCODER_MIN_INTERVAL_SECONDS` (`implemented`, optional with default)
+  - default in code: `1.1`
+  - enforces minimum spacing between Nominatim requests
+- `GEOCODER_USER_AGENT` (`implemented`, optional with default)
+  - default in code: `docmap-geocoder/0.1 (+https://github.com/docmap)`
 
 ### Startup migration controls
 

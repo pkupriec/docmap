@@ -46,6 +46,21 @@ def get_pending_mentions(conn: Connection, *, limit: int = 1000, offset: int = 0
     return mentions
 
 
+def count_pending_mentions(conn: Connection) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM location_mentions lm
+            LEFT JOIN document_locations dl ON dl.mention_id = lm.id
+            WHERE dl.id IS NULL
+              AND lm.normalized_location IS NOT NULL
+              AND btrim(lm.normalized_location) <> ''
+            """
+        )
+        return int(cur.fetchone()[0])
+
+
 def get_geo_location_id_by_normalized_name(conn: Connection, normalized_location: str) -> str | None:
     with conn.cursor() as cur:
         cur.execute(

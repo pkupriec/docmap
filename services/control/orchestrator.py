@@ -8,11 +8,12 @@ from typing import Any
 
 from services.analytics import rebuild_analytics
 from services.analytics.bigquery_exporter import export_all_bi_tables
+from services.common.db import get_connection
 from services.control.constants import STAGES_BY_PIPELINE_TYPE, downstream_stages
 from services.control.repository import ControlRepository
 from services.crawler import filter_unprocessed_urls, generate_scp_urls, process_documents
 from services.extractor import process_pending_snapshots
-from services.geocoder import normalize_pending_mentions, process_pending_mentions
+from services.geocoder import count_pending_mentions, normalize_pending_mentions, process_pending_mentions
 
 
 logger = logging.getLogger(__name__)
@@ -699,6 +700,18 @@ class ControlOrchestrator:
                     f"Stage processing limited to first {TEST_STAGE_ITEM_LIMIT} items",
                     event_type="progress",
                 )
+            with get_connection() as conn:
+                pending_total = count_pending_mentions(conn)
+            progress_total = max(pending_total, start_index)
+            self.repository.append_log(
+                run_id,
+                stage,
+                "geocoder",
+                "INFO",
+                f"pending_mentions_total={pending_total} processing_limit={geocode_limit}",
+                event_type="progress",
+                current_index=start_index,
+            )
             if start_index > 0:
                 self.repository.append_log(
                     run_id,
@@ -714,7 +727,7 @@ class ControlOrchestrator:
                 if stop_requested:
                     return
             geocode_processed = start_index
-            geocode_total = 0
+            geocode_total = progress_total
             geocode_linked = base_linked
             geocode_unresolved = base_failed
 
@@ -754,7 +767,7 @@ class ControlOrchestrator:
                         current_index=start_index + processed,
                     )
                 geocode_processed = start_index + processed
-                geocode_total = start_index + total
+                geocode_total = max(progress_total, start_index + total)
                 geocode_linked = base_linked + linked_count
                 geocode_unresolved = base_failed + max(0, processed - linked_count)
                 self.repository.upsert_progress(
@@ -806,7 +819,7 @@ class ControlOrchestrator:
                 should_stop=lambda: stop_requested,
             )
             if geocode_total == 0:
-                geocode_total = start_index + geo_result.processed
+                geocode_total = max(progress_total, start_index + geo_result.processed)
             if geocode_processed == start_index:
                 geocode_processed = start_index + geo_result.processed
                 geocode_linked = base_linked + geo_result.linked

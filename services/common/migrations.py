@@ -73,6 +73,34 @@ def _apply_runtime_schema_patches() -> None:
                 ADD COLUMN IF NOT EXISTS pdf_blob BYTEA
                 """
             )
+            # Indexes added after initial bootstrap to improve extractor/geocoder
+            # lookup patterns and enforce one-run-per-snapshot assumptions.
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_document_snapshots_document_created_desc
+                ON document_snapshots(document_id, created_at DESC)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_document_snapshots_created_at_id
+                ON document_snapshots(created_at, id)
+                """
+            )
+            cur.execute("DROP INDEX IF EXISTS idx_extraction_runs_snapshot")
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_extraction_runs_snapshot_id
+                ON extraction_runs(snapshot_id)
+                """
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_document_locations_mention_id
+                ON document_locations(mention_id)
+                WHERE mention_id IS NOT NULL
+                """
+            )
 
 
 def run_startup_migrations() -> None:

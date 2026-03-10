@@ -53,6 +53,8 @@ def process_pending_mentions(
             processed_count = idx
             try:
                 status = _process_single_mention(conn, mention)
+                # Atomic unit of work is one mention: commit each item independently.
+                conn.commit()
                 if status == "linked":
                     linked += 1
                 elif status == "geocoded_and_linked":
@@ -63,6 +65,8 @@ def process_pending_mentions(
                 if on_mention:
                     on_mention(idx, total, geocoded, linked, mention, status, None)
             except Exception:
+                # Ensure transaction state is reset so later mentions can continue.
+                conn.rollback()
                 unresolved += 1
                 logger.exception(
                     "geocoder.mention_failed mention_id=%s normalized_location=%s",
@@ -71,8 +75,6 @@ def process_pending_mentions(
                 )
                 if on_mention:
                     on_mention(idx, total, geocoded, linked, mention, None, "mention_failed")
-
-        conn.commit()
 
     result = GeocodeBatchResult(
         processed=processed_count,
