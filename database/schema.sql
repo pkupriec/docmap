@@ -135,6 +135,7 @@ CREATE TABLE bi_documents (
     canonical_number TEXT,
     url TEXT NOT NULL,
     title TEXT,
+    preview_text TEXT,
     latest_snapshot_id UUID REFERENCES document_snapshots(id),
     latest_snapshot_at TIMESTAMP,
     location_count INTEGER NOT NULL DEFAULT 0,
@@ -150,6 +151,7 @@ CREATE TABLE bi_locations (
     latitude DOUBLE PRECISION,
     longitude DOUBLE PRECISION,
     precision TEXT,
+    parent_location_id UUID REFERENCES geo_locations(id),
     document_count INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
@@ -158,9 +160,21 @@ CREATE TABLE bi_document_locations (
     document_id UUID NOT NULL REFERENCES documents(id),
     location_id UUID NOT NULL REFERENCES geo_locations(id),
     mention_count INTEGER NOT NULL DEFAULT 0,
+    evidence_quote TEXT,
     updated_at TIMESTAMP NOT NULL DEFAULT now(),
     PRIMARY KEY (document_id, location_id)
 );
 
 CREATE INDEX idx_bi_document_locations_location
 ON bi_document_locations(location_id);
+
+CREATE TABLE bi_location_hierarchy (
+    ancestor_location_id UUID NOT NULL REFERENCES geo_locations(id),
+    descendant_location_id UUID NOT NULL REFERENCES geo_locations(id),
+    depth INTEGER NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (ancestor_location_id, descendant_location_id)
+);
+
+CREATE INDEX idx_bi_location_hierarchy_descendant_depth
+ON bi_location_hierarchy(descendant_location_id, depth);

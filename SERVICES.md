@@ -7,8 +7,8 @@ This document is authoritative for module ownership and write boundaries.
 - `crawler` (`implemented`): `scp_objects`, `documents`, `document_snapshots`
 - `extractor` (`implemented`): `extraction_runs`, `location_mentions`
 - `geocoder` (`implemented`): `geo_locations`, `document_locations`
-- `analytics` (`implemented`): `bi_documents`, `bi_locations`, `bi_document_locations`
-- `presentation` (`planned`): reads `bi_documents`, `bi_locations`, `bi_document_locations`, `bi_location_hierarchy`; writes nothing
+- `analytics` (`implemented`): `bi_documents`, `bi_locations`, `bi_document_locations`, `bi_location_hierarchy`
+- `presentation` (`implemented`): reads `bi_documents`, `bi_locations`, `bi_document_locations`, `bi_location_hierarchy`; writes nothing
 - `control plane` (`implemented`): `pipeline_runs`, `pipeline_stage_runs`, `pipeline_progress`, `pipeline_logs`, `pipeline_commands`
 
 ## 1) Crawler
@@ -96,10 +96,11 @@ Notable limits:
 ## 7) Presentation
 
 Files:
-- `services/presentation/*` or dedicated presentation module tree
-- frontend UI under the repository UI application chosen for phase11
+- `services/presentation/backend/*`
+- `services/presentation/frontend/*`
+- runtime entrypoint: `main_presentation.py`
 
-Responsibilities (`planned`):
+Responsibilities (`implemented`):
 - expose read-only API for map/location/document exploration
 - render interactive spatial UI
 - provide location-to-document and document-to-location navigation
@@ -113,6 +114,6 @@ Behavior:
 - must not call crawler, extractor, or geocoder logic directly
 
 Notable limits:
-- `planned`: MVP supports point geometries only
-- `planned`: search is out of scope for MVP
-- `planned`: mobile UX is out of scope for MVP
+- `implemented`: MVP supports point geometries only
+- `implemented`: search is out of scope for MVP
+- `implemented`: desktop-first UX (mobile is out of scope for MVP)

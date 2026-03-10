@@ -42,7 +42,7 @@ Presentation flow:
 - command queue table `pipeline_commands`
 - live status tables: `pipeline_runs`, `pipeline_stage_runs`, `pipeline_progress`, `pipeline_logs`
 
-### Presentation Layer (`planned`)
+### Presentation Layer (`implemented`)
 
 - read-only presentation API over BI tables
 - interactive spatial UI for document/location exploration
@@ -83,6 +83,7 @@ Presentation flow:
   - `postgres`
   - `app`
   - `control-ui`
+  - `presentation`
   - `pgadmin`
 - `planned`: production deployment topology and hardening are not codified yet
-- `planned`: dedicated presentation service/container
+- `implemented`: dedicated presentation service/container (`Dockerfile.presentation`, `main_presentation.py`)

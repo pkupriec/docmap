@@ -12,6 +12,7 @@ PRIMARY_KEYS: dict[str, list[str]] = {
     "bi_documents": ["document_id"],
     "bi_locations": ["location_id"],
     "bi_document_locations": ["document_id", "location_id"],
+    "bi_location_hierarchy": ["ancestor_location_id", "descendant_location_id"],
 }
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def export_all_bi_tables(
     start_index: int = 0,
 ) -> None:
     logger.info("analytics.bigquery_export_all_start mode=%s", mode)
-    tables = ("bi_documents", "bi_locations", "bi_document_locations")
+    tables = ("bi_documents", "bi_locations", "bi_document_locations", "bi_location_hierarchy")
     if start_index < 0:
         start_index = 0
     if start_index > len(tables):

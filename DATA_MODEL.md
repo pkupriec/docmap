@@ -37,18 +37,14 @@ This document reflects the current SQL schema in:
 - `bi_documents`
 - `bi_locations`
 - `bi_document_locations`
+- `bi_location_hierarchy`
 
 These are rebuildable denormalized analytics tables.
 
-### BI Extensions for Presentation Layer (`required for phase11`)
-- `bi_location_hierarchy`
+Presentation extensions now implemented in BI schema:
 
-This table is required for the presentation layer hierarchy fallback contract.
-It must be treated as part of the BI projection set used by phase11.
-
-Presentation-driven BI extensions required by phase11 include:
 - document preview fields in `bi_documents`
-- hierarchy support in `bi_locations` and `bi_location_hierarchy`
+- hierarchy support in `bi_locations.parent_location_id` and `bi_location_hierarchy`
 - evidence quote support in `bi_document_locations`
 
 The presentation layer must consume BI projections only.

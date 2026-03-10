@@ -101,6 +101,41 @@ def _apply_runtime_schema_patches() -> None:
                 WHERE mention_id IS NOT NULL
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_documents
+                ADD COLUMN IF NOT EXISTS preview_text TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_locations
+                ADD COLUMN IF NOT EXISTS parent_location_id UUID
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_document_locations
+                ADD COLUMN IF NOT EXISTS evidence_quote TEXT
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bi_location_hierarchy (
+                    ancestor_location_id UUID NOT NULL REFERENCES geo_locations(id),
+                    descendant_location_id UUID NOT NULL REFERENCES geo_locations(id),
+                    depth INTEGER NOT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+                    PRIMARY KEY (ancestor_location_id, descendant_location_id)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bi_location_hierarchy_descendant_depth
+                ON bi_location_hierarchy(descendant_location_id, depth)
+                """
+            )
 
 
 def run_startup_migrations() -> None:

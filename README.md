@@ -10,6 +10,7 @@ DocMap is an operator-driven data pipeline for SCP Wiki documents:
 - `implemented`: control API + orchestrator (`services/control/*`)
 - `implemented`: operator UI (`ui/`) with start/cancel/retry/retry-stage/resume-stage
 - `implemented`: crawler/extractor/geocoder/analytics/export services
+- `implemented`: presentation layer service (`services/presentation/*`) with read-only map API + dedicated UI
 - `partial`: scheduler exists in code (`services/pipeline/scheduler.py`) but is not started by the main app
 - `partial`: BigQuery export works when GCP env + credentials are configured
 - `planned`: external publication/dashboard automation (Looker operationalization)
@@ -22,6 +23,7 @@ DocMap is an operator-driven data pipeline for SCP Wiki documents:
 3. Open:
    - API: `http://localhost:8000`
    - Control UI: `http://localhost:5173`
+   - Presentation UI/API: `http://localhost:8080`
    - pgAdmin: `http://localhost:5050`
 
 ## Extraction Runtime Tuning
@@ -36,7 +38,9 @@ Extractor/Ollama behavior is configurable via env vars (see `docs/CONFIGURATION.
 ## Key Entry Points
 
 - App entrypoint: `main.py`
+- Presentation entrypoint: `main_presentation.py`
 - API app factory: `services/control/api.py:create_app`
+- Presentation app factory: `services/presentation/backend/api.py:create_presentation_app`
 - Orchestrator: `services/control/orchestrator.py`
 - Compose: `infra/docker-compose.yml`
 - DB schemas:

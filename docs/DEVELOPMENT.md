@@ -14,6 +14,7 @@ Services:
 - `postgres` on `5432`
 - `app` on `8000`
 - `control-ui` on `5173`
+- `presentation` on `8080`
 - `pgadmin` on `5050`
 
 ## Recommended Dev Loop
@@ -23,6 +24,7 @@ Services:
 3. Use UI at `http://localhost:5173` for control-plane scenarios.
 4. Inspect logs:
    `docker compose -f infra/docker-compose.yml logs -f app`
+5. Presentation UI is available at `http://localhost:8080`.
 
 ## Extractor Tuning During Development
 
@@ -47,6 +49,8 @@ Run tests inside app container:
   `docker compose -f infra/docker-compose.yml exec -T app python -m py_compile <files...>`
 - UI build:
   `docker compose -f infra/docker-compose.yml exec -T control-ui sh -lc "cd /app/ui && npm run -s build"`
+- Presentation image build:
+  `docker compose -f infra/docker-compose.yml build presentation`
 
 ## Coding Boundaries
 

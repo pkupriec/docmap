@@ -61,3 +61,22 @@ All notable repository-level changes are documented here.
 - Single active run policy and command queue behavior documented as implemented.
 - BigQuery export requirements and failure mode documented.
 - Scheduler presence documented as partial (module exists, not auto-started).
+
+### Presentation Layer
+
+- Implemented phase 11 presentation backend in `services/presentation/backend/*` with read-only endpoints:
+  - `GET /api/map/locations`
+  - `GET /api/map/location/{location_id}/documents`
+  - `GET /api/map/document/{document_id}/locations`
+  - `GET /api/map/overlays/density`
+- Implemented hierarchy fallback in backend using BI hierarchy tables (`city -> region -> country`).
+- Implemented dedicated presentation frontend app in `services/presentation/frontend/*` using React + Vite + TypeScript + MapLibre GL + deck.gl.
+- Added separate presentation runtime/container:
+  - `main_presentation.py`
+  - `Dockerfile.presentation`
+  - `presentation` service in `infra/docker-compose.yml`.
+- Extended BI schema and analytics rebuild for presentation contract:
+  - `bi_documents.preview_text`
+  - `bi_locations.parent_location_id`
+  - `bi_document_locations.evidence_quote`
+  - `bi_location_hierarchy`.

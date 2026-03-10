@@ -75,6 +75,23 @@ services:
     ports:
       - "5173:5173"
 
+  presentation:
+    build:
+      context: ..
+      dockerfile: Dockerfile.presentation
+    container_name: docmap-presentation
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://docmap:docmap@postgres:5432/docmap
+      LOG_LEVEL: INFO
+      PYTHONUNBUFFERED: "1"
+      DB_RESET_ON_START: "0"
+      DB_DROP_TABLES_ON_START: "0"
+    ports:
+      - "8080:8080"
+
   pgadmin:
     image: dpage/pgadmin4:8
     container_name: docmap-pgadmin

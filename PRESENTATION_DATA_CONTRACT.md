@@ -1,185 +1,83 @@
-# PRESENTATION_DATA_CONTRACT.md
+# Presentation Data Contract
 
-## Purpose
+## Scope
 
-This document defines the data structures required by the presentation layer.
+This contract defines the fields consumed by phase 11 presentation API/UI.
 
-The presentation layer consumes BI tables and exposes structured responses to the frontend.
+All IDs are UUID strings in API payloads.
 
----
+## Source Tables
 
-# Entities
+- `bi_documents`
+- `bi_locations`
+- `bi_document_locations`
+- `bi_location_hierarchy`
 
-Primary entities:
+## Location Contract
 
-Document
-Location
-DocumentLocationLink
-
----
-
-# Document
-
-Source: bi_documents
-
-Fields required:
-
-document_id
-scp_object_id
-title
-url
-preview_text
-
-Example:
-
-{
-  "document_id": 123,
-  "scp_object_id": "SCP-173",
-  "title": "The Sculpture",
-  "url": "https://scp-wiki.wikidot.com/scp-173",
-  "preview_text": "SCP-173 is constructed from concrete..."
-}
-
----
-
-# Location
-
-Source: bi_locations
+Source: `bi_locations`
 
 Fields:
 
-location_id
-name
-latitude
-longitude
-precision
-parent_location_id
-document_count
+- `location_id` (UUID)
+- `name` (`bi_locations.normalized_location`)
+- `latitude` (float)
+- `longitude` (float)
+- `precision` (string|null)
+- `document_count` (int)
+- `parent_location_id` (UUID|null)
 
-Example:
+## Document Card Contract
 
-{
-  "location_id": 22,
-  "name": "Tokyo",
-  "latitude": 35.6762,
-  "longitude": 139.6503,
-  "precision": "city",
-  "document_count": 14
-}
-
----
-
-# Location Hierarchy
-
-Source: bi_location_hierarchy
+Source: `bi_documents` + `bi_document_locations`
 
 Fields:
 
-ancestor_location_id
-descendant_location_id
-depth
+- `document_id` (UUID)
+- `scp_object_id` (UUID|null)
+- `title` (string|null)
+- `url` (string)
+- `preview_text` (string|null)
+- `evidence_quote` (string|null)
+- `mention_count` (int)
 
-Example:
+## Document-Location Link Contract
 
-country
-→ region
-→ city
-
-Used for fallback logic.
-
----
-
-# Document Location Link
-
-Source: bi_document_locations
+Source: `bi_document_locations` + `bi_locations`
 
 Fields:
 
-document_id
-location_id
-evidence_quote
+- `document_id` (UUID)
+- `location_id` (UUID)
+- `name` (string)
+- `latitude` (float)
+- `longitude` (float)
+- `precision` (string|null)
+- `evidence_quote` (string|null)
+- `mention_count` (int)
 
-Example:
+## Hierarchy Contract
 
-{
-  "document_id": 52,
-  "location_id": 11,
-  "evidence_quote": "Recovered near the outskirts of Warsaw."
-}
-
----
-
-# Geometry Model
-
-MVP supports:
-
-point geometries only.
+Source: `bi_location_hierarchy`
 
 Fields:
 
-latitude
-longitude
+- `ancestor_location_id` (UUID)
+- `descendant_location_id` (UUID)
+- `depth` (int)
 
-Future extensions:
+Depth semantics:
 
-polygon
-uncertainty radius
+- `0` = self
+- `1` = parent
+- `2+` = upper ancestors
 
----
+## Fallback Result Contract
 
-# Precision Model
+`GET /api/map/location/{id}/documents` returns:
 
-Precision describes the spatial granularity.
+- `requested_location_id` (UUID)
+- `resolved_location_id` (UUID|null)
+- `fallback_depth` (int|null)
+- `items` (`DocumentCard[]`)
 
-Allowed values:
-
-continent
-country
-region
-city
-site
-unknown
-
-Precision is used for UI aggregation.
-
----
-
-# Document Card Contract
-
-Frontend requires:
-
-scp_object_id
-title
-preview_text
-url
-
-Optional:
-
-document_count
-location_count
-
----
-
-# Map Line Contract
-
-Lines represent relationships between:
-
-document ↔ location
-
-Fields:
-
-document_id
-location_id
-coordinates
-
----
-
-# Density Overlay Contract
-
-Used for heatmap layer.
-
-Fields:
-
-latitude
-longitude
-document_count

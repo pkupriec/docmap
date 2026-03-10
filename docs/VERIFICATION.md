@@ -17,11 +17,16 @@ This guide defines concrete checks for documentation/code consistency.
 4. UI build:
 `docker compose -f infra/docker-compose.yml exec -T control-ui sh -lc "cd /app/ui && npm run -s build"`
 
+5. Presentation API smoke:
+- `GET http://localhost:8080/healthz`
+- `GET http://localhost:8080/api/map/locations`
+
 ## Cross-Checks Performed For This Documentation Refresh
 
 ### Entrypoints
 
 - `main.py` loads `create_app()` from control API (`implemented`).
+- `main_presentation.py` loads `create_presentation_app()` from presentation backend (`implemented`).
 - Scheduler module exists but is not app-started (`partial`).
 
 ### Database
@@ -31,7 +36,7 @@ This guide defines concrete checks for documentation/code consistency.
 
 ### Runtime config
 
-- `infra/docker-compose.yml` includes app/postgres/control-ui/pgadmin (`implemented`).
+- `infra/docker-compose.yml` includes app/postgres/control-ui/presentation/pgadmin (`implemented`).
 - Extractor/Ollama tuning env vars are present (`EXTRACTOR_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_THINK_LEVEL`, `OLLAMA_NUM_PREDICT`).
 - BigQuery env values are present but empty by default (`partial until operator config`).
 

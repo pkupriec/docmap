@@ -1,103 +1,63 @@
-# PRESENTATION_API_SPEC.md
+# Presentation API Spec
 
-## Purpose
+## Scope
 
-Defines read-only endpoints used by the frontend.
+Read-only API for presentation map UI.
 
-The API must be stateless.
+Base paths:
 
----
+- map endpoints: `/api/map/*`
+- health: `/healthz`
 
-# GET /api/map/locations
+## GET `/api/map/locations`
 
-Schema: LocationResponse
+Returns all point locations from `bi_locations` with deterministic ordering.
 
-Fields:
-- location_id
-- name
-- latitude
-- longitude
-- precision
-- document_count
-- parent_location_id (optional in response if needed by client)
+Response: `Location[]`
 
-Returns all visible locations.
+## GET `/api/map/location/{location_id}/documents`
+
+Returns documents for a location with backend hierarchy fallback.
+
+Path parameter:
+
+- `location_id` UUID
 
 Response:
 
-[
-  {
-    "location_id": 1,
-    "name": "Paris",
-    "latitude": 48.8566,
-    "longitude": 2.3522,
-    "precision": "city",
-    "document_count": 5
-  }
-]
+```json
+{
+  "requested_location_id": "uuid",
+  "resolved_location_id": "uuid-or-null",
+  "fallback_depth": 0,
+  "items": []
+}
+```
 
----
+Fallback:
 
-# GET /api/map/location/{id}/documents
+- direct location first
+- if empty: nearest ancestor depth with documents (`city -> region -> country`)
 
-Schema: DocumentCard
+## GET `/api/map/document/{document_id}/locations`
 
-Fields:
-- document_id
-- scp_object_id
-- title
-- url
-- preview_text
-- evidence_quote (optional)
+Returns linked locations for a document.
 
-Returns documents linked to a location.
+Path parameter:
 
----
+- `document_id` UUID
 
-# GET /api/map/document/{id}/locations
+Response: `DocumentLocationLink[]`
 
-Schema: DocumentLocationLink
+## GET `/api/map/overlays/density`
 
-Fields:
-- document_id
-- location_id
-- latitude
-- longitude
-- precision
-- evidence_quote (optional)
+Returns density points from `bi_locations`.
 
-Returns locations referenced by a document.
+Response: `DensityPoint[]`
 
----
+## Determinism and Read-Only Rules
 
-# GET /api/map/overlays/density
+- API performs `SELECT` queries only.
+- Responses are deterministically ordered.
+- API does not call crawler/extractor/geocoder services.
 
-Schema: DensityPoint
-
-Fields:
-- latitude
-- longitude
-- document_count
-
-Returns density grid.
-
-Used for heatmap layer.
-
----
-
-# API Requirements
-
-All endpoints must:
-
-be read-only
-use SQL standard queries
-return deterministic results
-All SQL used by API endpoints must follow portable SQL rules.
-
-Queries should remain compatible with:
-- PostgreSQL
-- BigQuery
-- DuckDB
-
-Avoid PostGIS-only API query semantics.
-Return coordinates as latitude/longitude fields in API responses.

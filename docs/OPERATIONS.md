@@ -3,7 +3,8 @@
 ## Service Endpoints
 
 - API: `http://localhost:8000`
-- UI: `http://localhost:5173`
+- Control UI: `http://localhost:5173`
+- Presentation UI/API: `http://localhost:8080`
 - pgAdmin: `http://localhost:5050`
 
 ## Start / Stop
@@ -17,12 +18,25 @@ Stop:
 Restart app only:
 `docker compose -f infra/docker-compose.yml restart app`
 
+Restart presentation only:
+`docker compose -f infra/docker-compose.yml restart presentation`
+
 ## Health Checks
 
 - Container status:
   `docker compose -f infra/docker-compose.yml ps`
 - Tail app logs:
   `docker compose -f infra/docker-compose.yml logs --tail=200 app`
+- Tail presentation logs:
+  `docker compose -f infra/docker-compose.yml logs --tail=200 presentation`
+
+## Presentation API Operations
+
+- `GET /api/map/locations`
+- `GET /api/map/location/{location_id}/documents`
+- `GET /api/map/document/{document_id}/locations`
+- `GET /api/map/overlays/density`
+- `GET /healthz`
 
 ## Control API Operations
 

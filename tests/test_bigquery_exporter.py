@@ -64,3 +64,17 @@ def test_export_table_to_bigquery_incremental(monkeypatch) -> None:
     assert any(event.startswith("load:proj.ds.bi_document_locations__staging") for event in events)
     assert "ensure_target" in events
     assert "merge" in events
+
+
+def test_export_all_bi_tables_includes_location_hierarchy(monkeypatch) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(bigquery_exporter, "export_table_to_bigquery", lambda table_name, mode="full": seen.append(table_name))
+
+    bigquery_exporter.export_all_bi_tables(mode="full")
+
+    assert seen == [
+        "bi_documents",
+        "bi_locations",
+        "bi_document_locations",
+        "bi_location_hierarchy",
+    ]

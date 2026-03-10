@@ -80,6 +80,14 @@ Status:
 - Vite runtime base path:
   - `VITE_API_BASE` (default `/api`)
 
+## Presentation Runtime
+
+- `presentation` container listens on `8080` (see `infra/docker-compose.yml`)
+- required:
+  - `DATABASE_URL`
+- optional:
+  - `PRESENTATION_STATIC_DIR` (default `/app/services/presentation/frontend/dist`)
+
 ## Secret Handling
 
 - `implemented`: credentials expected via mounted file path

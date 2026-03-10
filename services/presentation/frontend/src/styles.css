@@ -1,0 +1,102 @@
+:root {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: #1f2933;
+  background: #e6edf7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 240px 1fr 380px;
+  width: 100%;
+  height: 100%;
+}
+
+.left-panel,
+.right-panel {
+  padding: 16px;
+  background: #f7fafc;
+  border-right: 1px solid #d8e1ec;
+  overflow: auto;
+}
+
+.right-panel {
+  border-right: 0;
+  border-left: 1px solid #d8e1ec;
+}
+
+.map-panel {
+  position: relative;
+}
+
+.map-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.caption {
+  margin-top: 0;
+  color: #52606d;
+  font-size: 13px;
+}
+
+button {
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: #2f6fed;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.cards {
+  display: grid;
+  gap: 10px;
+}
+
+.doc-card {
+  border: 1px solid #d8e1ec;
+  border-radius: 8px;
+  padding: 10px;
+  background: #ffffff;
+}
+
+.doc-card header {
+  color: #2f6fed;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.doc-card h3 {
+  margin: 6px 0;
+  font-size: 14px;
+}
+
+.doc-card p {
+  margin: 0 0 8px;
+  color: #334e68;
+  font-size: 13px;
+}
+
+.doc-card a {
+  color: #185abc;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.fallback-note {
+  color: #9f580a;
+  font-size: 12px;
+}
+

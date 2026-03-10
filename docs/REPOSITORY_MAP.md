@@ -5,8 +5,10 @@ Top-level structure and current role.
 ## Root
 
 - `main.py` - app entrypoint
+- `main_presentation.py` - presentation service entrypoint
 - `pyproject.toml` - Python package/dependency config
 - `Dockerfile` - app image build
+- `Dockerfile.presentation` - presentation image build
 - `README.md` - first-entry documentation
 - `PROJECT.md`, `ARCHITECTURE.md`, `SERVICES.md`, `PIPELINE.md`, `DATA_MODEL.md` - source-of-truth docs
 - `CHANGELOG.md` - repo change log
@@ -33,6 +35,9 @@ Top-level structure and current role.
   - direct pipeline runner + scheduler module
 - `control/`
   - FastAPI routes, orchestrator, repository, schemas, constants
+- `presentation/`
+  - `backend/` read-only presentation API/query layer
+  - `frontend/` dedicated React/Vite/TypeScript map UI
 
 ## `database/`
 
@@ -49,6 +54,10 @@ Top-level structure and current role.
 
 - React/Vite operator UI
 - key file: `ui/src/App.jsx`
+
+## `services/presentation/frontend/`
+
+- dedicated presentation UI app (React + Vite + TypeScript + MapLibre GL + deck.gl)
 
 ## `docs/`
 

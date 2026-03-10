@@ -1,85 +1,44 @@
-# PRESENTATION_IMPLEMENTATION_PLAN.md
+# Presentation Implementation Plan
 
+## Status
 
-The presentation layer is delivered as an independent service.
+Phase 11 MVP is implemented with dedicated backend/frontend module trees and a separate container runtime.
 
-Implementation structure:
+## Delivered Structure
 
-- presentation backend
-- presentation frontend
-- dedicated container build
+- backend: `services/presentation/backend/*`
+- frontend: `services/presentation/frontend/*`
+- runtime entrypoint: `main_presentation.py`
+- container build: `Dockerfile.presentation`
+- compose service: `presentation` in `infra/docker-compose.yml`
 
-The control plane remains a separate service and must not be used as the runtime host for presentation UI.
+## Delivered BI Extensions
 
-## Phase 0 — Design Hardening
+- `bi_documents.preview_text`
+- `bi_locations.parent_location_id`
+- `bi_document_locations.evidence_quote`
+- `bi_location_hierarchy`
 
-Finalize documentation.
+## Delivered API
 
-Outputs:
+- `GET /api/map/locations`
+- `GET /api/map/location/{location_id}/documents`
+- `GET /api/map/document/{document_id}/locations`
+- `GET /api/map/overlays/density`
+- `GET /healthz`
 
-architecture spec
-data contract
-UX spec
-API spec
-task list
+## Delivered UX
 
----
+- map-first desktop layout
+- hover preview
+- pinned selection on click
+- reset via `Esc`, empty-map click, and `Clear`
+- document cards with `preview_text`
+- source links open in a new browser tab
 
-## Phase 1 — BI Preparation
+## Remaining Planned Enhancements
 
-Extend BI schema.
+- richer map modes and clustering tuning
+- additional visual layers beyond density points
+- production deployment hardening
 
-Tasks:
-
-add parent_location_id
-add hierarchy table
-add preview_text
-add evidence_quote
-
----
-
-## Phase 2 — Backend
-
-Build FastAPI service.
-
-Tasks:
-
-database connection
-query layer
-API endpoints
-hierarchy fallback logic
-
----
-
-## Phase 3 — Map Prototype
-
-Implement minimal UI.
-
-Features:
-
-map rendering
-hover interaction
-pinned selection
-document panel
-
----
-
-## Phase 4 — Visualization
-
-Add advanced layers:
-
-clustering
-density heatmap
-map modes
-
----
-
-## Phase 5 — Productionization
-
-Tasks:
-
-Docker container for presentation service
-independent deployment configuration
-logging
-performance tuning
-documentation refresh

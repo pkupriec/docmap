@@ -87,3 +87,7 @@ Command queue type is `retry_stage|retry_run|start_run|cancel_run`.
 - `implemented`: persistent per-run logs in `pipeline_logs`
 - `implemented`: current state in `pipeline_progress`
 - `implemented`: SSE event stream (`run_status`, `stage_status`, `progress`, `log`, `heartbeat`)
+
+## Presentation Consumption
+
+- `implemented`: presentation service reads BI outputs (`bi_documents`, `bi_locations`, `bi_document_locations`, `bi_location_hierarchy`) in read-only mode.

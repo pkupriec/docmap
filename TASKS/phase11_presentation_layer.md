@@ -31,7 +31,7 @@ The agent must read and follow:
 - PRESENTATION_API_SPEC.md
 - PRESENTATION_IMPLEMENTATION_PLAN.md
 - AGENT/PRESENTATION_EXECUTION_RULES.md
-- implementation inside the existing repository UI application (`ui/`)
+- implementation inside dedicated presentation module trees (`services/presentation/backend`, `services/presentation/frontend`)
 
 ## Scope
 

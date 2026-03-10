@@ -18,6 +18,7 @@ Build a reproducible pipeline that maps SCP documents to real-world locations re
 - `implemented`: BigQuery export (full + incremental merge modes)
 - `implemented`: control plane API + UI + SSE monitoring
 - `implemented`: stage retry and stage resume controls
+- `implemented`: presentation layer API + dedicated map UI (`services/presentation/*`, container `presentation`)
 
 ## Partially Implemented Scope
 
@@ -36,6 +37,7 @@ Build a reproducible pipeline that maps SCP documents to real-world locations re
 - One orchestrator thread polls and executes control commands
 - Postgres/PostGIS as operational store and control-plane metadata store
 - React/Vite operator UI as separate container in dev compose
+- Separate presentation runtime (`main_presentation.py`) serving presentation API + built frontend
 
 ## Constraints
 
