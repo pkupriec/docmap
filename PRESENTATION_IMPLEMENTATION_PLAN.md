@@ -1,0 +1,74 @@
+# PRESENTATION_IMPLEMENTATION_PLAN.md
+
+## Phase 0 — Design Hardening
+
+Finalize documentation.
+
+Outputs:
+
+architecture spec
+data contract
+UX spec
+API spec
+task list
+
+---
+
+## Phase 1 — BI Preparation
+
+Extend BI schema.
+
+Tasks:
+
+add parent_location_id
+add hierarchy table
+add preview_text
+add evidence_quote
+
+---
+
+## Phase 2 — Backend
+
+Build FastAPI service.
+
+Tasks:
+
+database connection
+query layer
+API endpoints
+hierarchy fallback logic
+
+---
+
+## Phase 3 — Map Prototype
+
+Implement minimal UI.
+
+Features:
+
+map rendering
+hover interaction
+pinned selection
+document panel
+
+---
+
+## Phase 4 — Visualization
+
+Add advanced layers:
+
+clustering
+density heatmap
+map modes
+
+---
+
+## Phase 5 — Productionization
+
+Tasks:
+
+Docker container
+Cloud Run deployment
+logging
+performance tuning
+documentation refresh
