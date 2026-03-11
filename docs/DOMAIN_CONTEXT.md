@@ -155,9 +155,14 @@ Many SCP locations are approximate.
 
 Coordinates should be interpreted as **representative points**, not precise measurements.
 
-Polygons are not required in MVP.
+Polygons were not required in the phase 11 MVP.
 
-The presentation layer uses **point geometries only**.
+Phase 12 permits mixed geometry rendering in the presentation layer:
+
+- country and region may use static polygon boundaries
+- city locations remain representative points
+
+Coordinates should still be interpreted as representative points rather than precise measurements.
 
 ---
 

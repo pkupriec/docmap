@@ -105,7 +105,14 @@ Responsibilities (`implemented`):
 - render interactive spatial UI
 - provide location-to-document and document-to-location navigation
 - support hierarchy fallback (`city -> region -> country`)
-- support hover and pinned selection behavior
+- support hover and pinned location selection behavior
+
+Responsibilities (`extended in phase 12`):
+- provide API-backed search
+- support redesigned document cards
+- support PDF thumbnail + modal interactions
+- support pinned document visualization
+- support mixed geometry rendering for countries/regions with city points
 
 Behavior:
 - reads BI tables only
@@ -113,7 +120,18 @@ Behavior:
 - must use portable SQL suitable for PostgreSQL and later BI portability targets
 - must not call crawler, extractor, or geocoder logic directly
 
+Phase 12 may require coordinated updates to:
+
+- backend response schemas
+- repository/query logic
+- API handlers
+- frontend state/rendering
+- automated tests
+
+These updates remain within the presentation service boundary and do not violate the read-only architectural role.
+
 Notable limits:
-- `implemented`: MVP supports point geometries only
-- `implemented`: search is out of scope for MVP
-- `implemented`: desktop-first UX (mobile is out of scope for MVP)
+- `implemented`: phase 11 MVP started with point geometries only
+- `extended in phase 12`: mixed geometry is allowed for country/region polygons with city points
+- `extended in phase 12`: API-backed search is part of the presentation layer
+- `implemented`: desktop-first UX (mobile is out of scope for the current phase)

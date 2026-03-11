@@ -21,6 +21,14 @@ Control plane remains separate:
 - backend: `main.py` + `services/control/*`
 - frontend: `ui/*`
 
+## Static Geometry Assets
+
+Phase 12 may load static administrative boundary assets for countries and regions.
+
+These assets are part of the presentation runtime and must remain separate from BI table mutation logic.
+
+They do not change the BI contract and do not introduce write paths into the presentation service.
+
 ## Data Inputs
 
 Presentation backend reads only:
@@ -50,25 +58,80 @@ Presentation API is deterministic for identical BI table state:
 - no random sampling
 - no time-dependent shaping
 
-## Geometry Scope
+## Search Mode Behavior
 
-MVP supports point geometries only:
+Search is an API-backed presentation capability.
 
-- `latitude`
-- `longitude`
+When search is active:
 
-No polygons or uncertainty radii in phase 11.
+- the right panel is driven by search results instead of location hover/pin results
+- the map remains interactive
+- viewport updates are driven by returned result coordinates
+
+## Location Geometry Model
+
+The presentation layer supports mixed geometry rendering.
+
+Geometry hierarchy:
+
+country → polygon
+region → polygon
+city → point
+
+Geometry fallback rules:
+
+- if polygon is too small for the current zoom level, it must be rendered as a point.
+
+Click behavior:
+
+- clicking a polygon must behave identically to clicking the corresponding location marker.
+
+Administrative boundary geometries must be loaded from static GeoJSON datasets.
+
+Countries and regions are rendered as polygons.
+
+Cities remain point locations.
 
 ## UX Scope
 
-Desktop-first map UI with two interaction states:
+The presentation UI is desktop-first.
+
+Phase 11 baseline interactions:
 
 - hover preview
-- pinned selection
+- pinned location selection
 
-Reset sources:
+Phase 12 extends the interaction model with:
+
+- API-backed search results
+- pinned document visualization
+- PDF modal viewing
+
+Reset/close sources:
 
 - `Esc`
 - empty-map click
 - `Clear` button
+- modal close button
+- click outside the PDF modal
+
+## State-Driven Visualization Rule
+State precedence must follow `PRESENTATION_UX_SPEC.md` and `TASKS/phase12_presentation_ux_iteration_1.md`.
+
+Later presentation task files may extend the phase 11 MVP interaction model without rewriting the overall presentation architecture.
+
+Presentation interactions must be state-driven.
+
+At minimum, the frontend architecture must model:
+
+- hovered_location_id
+- pinned_location_id
+- hovered_document_id
+- pinned_document_id
+- search_query
+- search_results
+- visible_document_links
+- pdf_modal_document_id
+
+Rendering must be derived from this state instead of ad hoc DOM-driven logic.
 

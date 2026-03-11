@@ -4,183 +4,261 @@
 
 The interface consists of three regions:
 
-left panel
-map viewport
-right panel
+- left control panel
+- map viewport
+- right document panel
+
+The layout is desktop-first.
 
 ---
 
-# Left Panel
+## Left Control Panel
 
-Contains map controls.
+The left panel contains map-related controls and future layer controls.
 
-Controls include:
+Phase 12 requirements:
 
-map mode
-overlay toggles
-future layers
+- the panel must support collapsed and expanded states
+- the collapsed state must remain visible as a thin vertical bar
+- the collapsed bar is reserved for future layer icons
 
 ---
 
-# Map Viewport
+## Map Viewport
 
-Primary interaction surface.
+The map viewport is the primary spatial interaction surface.
 
 The map displays:
 
-locations
-document connections
-density overlays
+- point locations
+- mixed geometry locations
+- document-link visualization
+- optional overlays such as density
 
 ---
 
-# Precision Awareness
+## Right Document Panel
 
-Location precision is part of the data contract.
+The right panel displays one of these content modes:
 
-In MVP, precision does not require separate user controls, but it may influence:
-- marker styling
-- future clustering behavior
-- future visual differentiation of location granularity
+- default instructional state
+- location-driven document list
+- search results
+- loading state
+- error state
 
-The frontend must preserve the precision field in its internal models.
-It must not invent precision values.
-
-# Interaction Model
-
-Two interaction states:
-
-hover
-pinned selection
+Search results replace location-driven content while search is active.
 
 ---
 
-# UI State Machine
+## Interaction State Model
 
-The MVP UI uses these states:
+The UI supports these states:
 
-idle
-hover_location
-pinned_location
-document_hover
-loading
-error
+- idle
+- hover_location
+- pinned_location
+- search_results
+- document_hover
+- pinned_document
+- pdf_modal
+- loading
+- error
 
-Transitions:
+State precedence:
 
-idle -> hover_location
-hover_location -> idle
-hover_location -> pinned_location
-pinned_location -> idle
-pinned_location -> document_hover
-document_hover -> pinned_location
-any -> loading
-loading -> previous stable state
-any -> error
+1. pdf_modal
+2. pinned_document
+3. document_hover
+4. search_results
+5. pinned_location
+6. hover_location
+7. idle
 
-Hover state is transient.
-Pinned state is explicit and must remain stable until reset.
+Notes:
 
-# Hover
-
-When the cursor hovers over a location:
-
-documents associated with that location appear in the right panel.
-
-Hover state is transient.
+- search_results replaces right-panel content, but the map remains interactive
+- pinned_document must survive map drag and viewport updates
+- pdf_modal must not destroy pinned_document state unless another document is selected
 
 ---
 
-# Pinned Selection
+## Hover and Pin Behavior
+
+### Hover Location
+
+When the cursor hovers over a location and no search state is active:
+
+- the right panel shows documents associated with that location
+- hover state is transient
+
+### Pin Location
 
 Clicking a location pins the selection.
 
-The right panel becomes fixed.
+Pinned location behavior:
+
+- the right panel remains fixed
+- map drag remains available
+- reset sources:
+  - Esc
+  - empty-map click
+  - Clear button
+
+### Hover Document Card
+
+Hovering a document card renders document-to-location visualization for visible linked locations.
+
+### Pin Document Card
+
+Clicking a document card pins the document visualization.
+
+Pinned document behavior:
+
+- the visualization remains visible while the map is dragged
+- visible links are recomputed as the viewport changes
+- newly visible linked locations appear
+- no-longer-visible linked locations disappear
+- the offscreen linked-location count is updated as the viewport changes
+
+### Empty Map Click
+
+Clicking empty map space clears:
+
+- pinned document
+- pinned location
 
 ---
 
-# Reset Behavior
+## Search Field
 
-Pinned selection resets when:
+A unified search field is displayed at the top of the right panel.
 
-user presses Esc
-user clicks empty map
-user presses Clear button
+Behavior:
 
----
+- activates after 3 or more characters
+- uses API-backed search
+- supports canonical SCP number and numeric-only SCP queries
+- supports case-insensitive prefix/contains matching over location display fields
+- returns at most 5 suggestions/results
+- search results replace location-driven right-panel content
+- while search is active, hover_location and pinned_location do not replace search results in the right panel
 
-# Right Panel
+Map synchronization rules:
 
-Displays document cards.
-
-Each card shows:
-
-scp_object_id
-title
-preview_text
-
-Buttons:
-
-Open source
-
-Opening source opens new browser tab.
+- a single result centers the map and chooses an appropriate zoom level
+- multiple results fit the result bounding box
 
 ---
 
-# Document Hover
+## Document Card
 
-Hovering a document card highlights connections on the map.
+Each document card displays:
 
-Lines appear between the document and linked locations.
+- canonical SCP number
+- contextual location
+- first-page PDF thumbnail
+
+Behavior:
+
+- the SCP number is a link to the SCP source page
+- the PDF thumbnail opens a modal viewer
+- card hover and card pin control map visualization
+
+The card remains vertically stacked in the right-panel column.
 
 ---
 
-# Empty State
+## PDF Modal
 
-When no location is selected:
+The PDF preview opens in a centered modal overlay.
 
-the right panel shows:
+Close sources:
+
+- close button
+- click outside the modal
+- selecting another document
+
+The modal close behavior must be consistent with the interaction state model and must not implicitly clear pinned document state unless another document is selected.
+
+Rendering rules:
+
+- first-page thumbnails are produced on the client using pdfjs-dist
+- the modal must not navigate away from the presentation UI
+
+---
+
+## Document-Link Visualization
+
+Phase 12 uses umbrella-style document-link visualization.
+
+Rules:
+
+- lines originate from the visual center of the document card
+- lines first move vertically to a shared anchor area near the card
+- from that anchor, lines spread toward visible linked locations in the map viewport
+- phase 12 renders these lines immediately without animation
+- the implementation must preserve an extension point for future animation
+
+Only visible linked locations are rendered as lines in this phase.
+
+An offscreen linked-location count must be shown in the card or associated UI.
+The offscreen count updates as the viewport changes during pinned-document mode.
+
+---
+
+## Geometry Rendering
+
+The UI supports mixed geometry rendering:
+
+- country -> polygon
+- region -> polygon
+- city -> point
+
+Fallback:
+
+- if a polygon is too small for the current zoom level, render it as a point
+
+Click behavior for polygons must match click behavior for the corresponding point location.
+
+---
+
+## Empty State
+
+When neither location-driven content nor search results are active, the right panel shows:
 
 "Explore the map to discover SCP documents."
 
 ---
 
-# Loading State
+## Loading State
 
-The panel shows loading indicators when data is fetched.
+The panel shows loading indicators while API-backed content is being fetched.
 
 ---
 
-# Error State
+## Error State
 
-API failures display:
+API failures show:
 
 "Unable to load data."
 
 ---
 
-# Performance
+## Performance
 
-Hover interaction latency must remain below:
+Targets:
 
-100 ms
-
-Initial load time target:
-
-2 seconds
+- hover interaction under 100 ms
+- viewport-linked visualization updates remain responsive
+- initial load target: 2 seconds for expected dataset
 
 ---
 
-# Desktop First
+## Accessibility
 
-The interface is optimized for desktop.
+Minimum keyboard support:
 
-Mobile support is not required for MVP.
-
----
-
-# Accessibility
-
-Keyboard support:
-
-Esc resets selection.
+- Esc clears pinned selection
+- Esc closes the PDF modal if open
+- keyboard focus must remain usable for search input and modal close interaction

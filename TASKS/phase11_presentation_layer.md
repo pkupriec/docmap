@@ -1,6 +1,10 @@
 # Phase 11 — Presentation Layer
 
 ## Goal
+Note:
+Phase 11 defines the MVP presentation baseline.
+Later presentation phases may explicitly extend this scope.
+When a later task file conflicts with this MVP baseline, the later task file governs the implementation of that later phase.
 
 Implement a read-only presentation layer for interactive spatial exploration of SCP documents and locations.
 

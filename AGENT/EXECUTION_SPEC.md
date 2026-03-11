@@ -134,10 +134,11 @@ The presentation layer must follow these rules:
 1. Use BI tables only as input.
 2. Do not call extraction, normalization, or geocoding services directly.
 3. Use portable SQL suitable for future analytical storage portability.
-4. Implement MVP with point geometries only.
+4. Phase 11 MVP started with point geometries only; later presentation task files may explicitly extend this.
 5. Implement hierarchy fallback in BI/API logic.
-6. Do not implement search in MVP unless explicitly reopened by the user.
-7. Keep the UI desktop-first in MVP.
+6. Search may be introduced only when explicitly authorized by later presentation task files.
+7. Keep the UI desktop-first unless a later task file explicitly changes this.
+8. The presentation layer remains read-only even when later phases add search, mixed geometry, or richer UI behavior.
 ---
 
 # Development Strategy
@@ -163,8 +164,14 @@ phase8_scheduler
 phase9_pipeline_hardening
 phase10_control_plane
 phase11_presentation_layer
+phase12_presentation_ux_iteration_1
+phase12_code_alignment
 
 The agent must execute phases sequentially.
+
+Later task files may extend the scope of earlier phases without invalidating the earlier baseline.
+
+When a later presentation task file conflicts with the phase 11 MVP baseline, the later task file governs that later implementation phase.
 
 Do not skip phases.
 

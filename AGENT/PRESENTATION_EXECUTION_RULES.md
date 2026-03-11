@@ -33,6 +33,9 @@ Before writing any code the agent MUST read these documents in this order:
 15. PRESENTATION_API_SPEC.md
 16. PRESENTATION_IMPLEMENTATION_PLAN.md
 17. TASKS/phase11_presentation_layer.md
+18. TASKS/phase12_presentation_ux_iteration_1.md
+19. TASKS/phase12_code_alignment.md
+20. TASKS/phase12_execution_checklist.md
 
 If conflicts appear, the order above defines priority.
 
@@ -100,38 +103,48 @@ The presentation layer must be implemented as a separate frontend application in
 
 # Geometry Rules
 
-MVP supports point geometries only.
+Phase 12 supports a mixed geometry model.
 
-Allowed fields:
+Allowed geometry behavior:
 
-latitude  
-longitude  
+- country -> polygon
+- region -> polygon
+- city -> point
 
-The agent must NOT implement:
+Geometry source rules:
 
-polygons  
-multi-polygons  
-uncertainty radii  
+- country and region geometries must come from static administrative boundary datasets
+- geometry loading must remain read-only
+- geometry datasets must not be generated heuristically in the frontend
 
-These features may appear later but are not part of this phase.
+Fallback rules:
+
+- if a polygon is too small or visually insignificant at the current zoom level, it must be rendered as a point
+- city locations remain points in this phase
+
+Forbidden geometry behavior:
+
+- no geometry editing
+- no uncertainty radii
+- no freeform polygon generation
+- no frontend-only inferred hierarchy
+
+Click behavior:
+
+- clicking a rendered polygon must behave identically to clicking the corresponding location marker
 
 ---
 
-# Search Rules
+# PDF Rules
+Document preview thumbnails must be rendered using pdfjs-dist.
 
-Search is not part of MVP.
+The first page of the PDF must be used to generate a thumbnail preview inside document cards.
 
-The agent must NOT implement:
+PDF documents must open inside a modal viewer without navigating away from the map interface.
 
-full-text search  
-document search  
-entity search  
+Visualization implementation must preserve an extension point for future animation.
 
-unless explicitly instructed by the user.
-
-Spatial navigation is the only discovery mechanism in MVP.
-
----
+Phase 12 renders document-link visualizations immediately without animation, but the implementation must not hard-code an approach that prevents later animated transitions.
 
 # SQL Portability Rules
 
@@ -220,24 +233,63 @@ Hover interaction must remain under:
 
 # UX Interaction Rules
 
-The UI must implement two states:
+The UI must support these high-level states:
 
-hover  
-pinned selection  
+- idle
+- hover_location
+- pinned_location
+- search_results
+- document_hover
+- pinned_document
+- pdf_modal
+- loading
+- error
 
-Behavior:
+State precedence rules:
 
-hover -> preview documents  
-click -> pin selection  
-Esc -> reset  
-click empty map -> reset  
+- pdf_modal overrides card hover rendering but must not destroy the pinned document state
+- search_results overrides location-driven right-panel content
+- pinned_document overrides transient document hover
+- pinned_location overrides hover_location
+
+Behavior rules:
+
+- hover over a location previews location documents in the right panel unless search is active
+- click on a location pins the location selection
+- hover over a document card shows document-to-visible-location visualization
+- click on a document card pins that visualization
+- clicking empty map space clears pinned document and pinned location state
+- Esc clears pinned selection and closes the PDF modal if open
 
 Document cards must:
 
-display preview text  
-open source document in new browser tab.
+- display canonical SCP number
+- link the SCP number to the SCP source page
+- display contextual location
+- display first-page PDF thumbnail
 
 ---
+
+---
+
+# Search Rules
+
+Search functionality is part of phase 12.
+
+Search must be implemented through the presentation API.
+
+Client-side-only search implementations are not allowed.
+
+Search interaction rules:
+
+- search results are independent from hover and pinned location state
+- when search is active, the right panel shows search results instead of location-driven results
+- search responses must be served by the presentation API
+- when multiple search results are returned, the map must fit the result bounding box
+- when a single search result is returned, the map must center on that result and choose an appropriate zoom level
+- search responses must be deterministically ordered
+- duplicate documents must not appear multiple times
+- duplicate locations must not appear multiple times
 
 # Forbidden Architecture Changes
 
@@ -257,15 +309,23 @@ The presentation layer is a single read-only service.
 
 The agent must implement in this order:
 
-1. BI schema adjustments
-2. presentation API
-3. UI shell
-4. map rendering
-5. hover/pin logic
-6. document cards
-7. map-to-panel synchronization
-8. tests
-9. documentation updates
+1. update presentation contracts and documentation for phase 12
+2. add BI/API fields required by document cards and search
+3. implement search endpoint and deterministic search ordering
+4. add geometry asset loading contract
+5. implement UI shell updates (collapsible left panel, search field, right panel states)
+6. implement document card redesign
+7. implement PDF thumbnail rendering and modal viewer
+8. implement document hover/pin visualization state model
+9. implement mixed geometry rendering and point fallback
+10. integrate viewport-aware recomputation of document-location lines
+11. add/update tests
+12. refresh documentation
+
+Implementation note:
+
+If phase 12 contracts require backend/API/schema/test updates, the agent must make those code changes.
+The user restriction in the review process applies to manual edits only and does not prohibit agent-driven implementation changes.
 
 ---
 
@@ -273,10 +333,17 @@ The agent must implement in this order:
 
 The implementation is considered complete when:
 
-the UI renders map locations  
-hover shows documents  
-click pins selection  
-document cards display preview text  
-links open SCP source pages  
-API reads BI tables only  
-no writes occur in the presentation service
+- the presentation UI renders map locations and mixed geometry according to phase 12 rules
+- search is available through the presentation API
+- search results replace the right panel content and update map viewport
+- document cards display SCP number, contextual location, and PDF thumbnail
+- clicking the SCP number opens the SCP source page
+- clicking the PDF preview opens a modal viewer
+- hovering a document card renders umbrella-style links to visible locations
+- clicking a document card pins the visualization
+- empty-map click resets pinned document and pinned location state
+- geometry click behavior matches location marker click behavior
+- API reads BI tables and static geometry assets only
+- no writes occur in the presentation service
+
+The implementation must also update backend schemas, repository/query logic, API handlers, frontend state, and tests wherever required to satisfy the phase 12 contracts.
