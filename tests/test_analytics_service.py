@@ -22,6 +22,11 @@ def test_rebuild_analytics_orchestrates_builders(monkeypatch) -> None:
     monkeypatch.setattr(service, "build_bi_locations", lambda c: 5)
     monkeypatch.setattr(service, "build_bi_document_locations", lambda c: 12)
     monkeypatch.setattr(service, "build_bi_location_hierarchy", lambda c: 7)
+    monkeypatch.setattr(
+        service,
+        "build_admin_boundaries_asset",
+        lambda c: type("R", (), {"features_written": 3})(),
+    )
 
     stats = service.rebuild_analytics()
 
@@ -30,5 +35,6 @@ def test_rebuild_analytics_orchestrates_builders(monkeypatch) -> None:
         "bi_locations": 5,
         "bi_document_locations": 12,
         "bi_location_hierarchy": 7,
+        "admin_boundaries": 3,
     }
     assert conn.committed is True

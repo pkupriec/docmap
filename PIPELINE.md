@@ -10,6 +10,8 @@ For `full_pipeline`:
 4. `analytics`
 5. `export`
 
+Analytics stage includes BI rebuild and, in phase 12, generation of presentation static administrative geometry assets from BI-derived location targets.
+
 ## Pipeline Types
 
 Defined in `services/control/constants.py`:
@@ -91,3 +93,4 @@ Command queue type is `retry_stage|retry_run|start_run|cancel_run`.
 ## Presentation Consumption
 
 - `implemented`: presentation service reads BI outputs (`bi_documents`, `bi_locations`, `bi_document_locations`, `bi_location_hierarchy`) in read-only mode.
+- `extended in phase 12`: presentation frontend reads static administrative geometry assets generated during analytics; no runtime geometry generation is performed in presentation startup.

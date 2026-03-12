@@ -29,6 +29,12 @@ These assets are part of the presentation runtime and must remain separate from 
 
 They do not change the BI contract and do not introduce write paths into the presentation service.
 
+Authoritative phase 12 integration:
+
+- geometry assets are generated outside presentation runtime as part of analytics-owned data preparation
+- presentation only loads already-generated static assets at runtime
+- geometry generation is deterministic for identical BI inputs and must not depend on UI interactions
+
 ## Data Inputs
 
 Presentation backend reads only:
@@ -134,4 +140,3 @@ At minimum, the frontend architecture must model:
 - pdf_modal_document_id
 
 Rendering must be derived from this state instead of ad hoc DOM-driven logic.
-

@@ -1,0 +1,76 @@
+{
+  "features": [
+    {
+      "geometry": {
+        "coordinates": [
+          [
+            [
+              -5.2,
+              51.2
+            ],
+            [
+              8.5,
+              51.2
+            ],
+            [
+              8.5,
+              42.2
+            ],
+            [
+              -5.2,
+              42.2
+            ],
+            [
+              -5.2,
+              51.2
+            ]
+          ]
+        ],
+        "type": "Polygon"
+      },
+      "properties": {
+        "country_name": "France",
+        "location_name": "France",
+        "location_rank": "country"
+      },
+      "type": "Feature"
+    },
+    {
+      "geometry": {
+        "coordinates": [
+          [
+            [
+              -124.6,
+              42.1
+            ],
+            [
+              -114.1,
+              42.1
+            ],
+            [
+              -114.1,
+              32.4
+            ],
+            [
+              -124.6,
+              32.4
+            ],
+            [
+              -124.6,
+              42.1
+            ]
+          ]
+        ],
+        "type": "Polygon"
+      },
+      "properties": {
+        "country_name": "United States",
+        "location_name": "California",
+        "location_rank": "region",
+        "region_name": "California"
+      },
+      "type": "Feature"
+    }
+  ],
+  "type": "FeatureCollection"
+}

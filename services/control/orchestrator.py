@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any
 
-from services.analytics import rebuild_analytics
+from services.analytics import ANALYTICS_STEP_NAMES, rebuild_analytics
 from services.analytics.bigquery_exporter import export_all_bi_tables
 from services.common.db import get_connection
 from services.control.constants import STAGES_BY_PIPELINE_TYPE, downstream_stages
@@ -846,8 +846,9 @@ class ControlOrchestrator:
         if stage == "analytics":
             progress = self.repository.get_progress_entry(run_id, stage) or {}
             start_index = int(progress.get("current_index") or 0)
-            if start_index > 3:
-                start_index = 3
+            total_steps = len(ANALYTICS_STEP_NAMES)
+            if start_index > total_steps:
+                start_index = total_steps
             processed = start_index
 
             def on_analytics_step(table_name: str, rows: int) -> None:
@@ -857,11 +858,11 @@ class ControlOrchestrator:
                     run_id,
                     stage,
                     current_index=processed,
-                    total_items=3,
+                    total_items=total_steps,
                     items_completed=processed,
                     items_failed=0,
                     current_item_label=table_name,
-                    message=f"analytics {processed}/3",
+                    message=f"analytics {processed}/{total_steps}",
                 )
                 self.repository.append_log(
                     run_id,
@@ -879,7 +880,7 @@ class ControlOrchestrator:
                     stage,
                     "analytics",
                     "INFO",
-                    f"Resume mode: continue from step {start_index}/3",
+                    f"Resume mode: continue from step {start_index}/{total_steps}",
                     event_type="progress",
                     current_index=start_index,
                 )
@@ -889,7 +890,7 @@ class ControlOrchestrator:
                 run_id,
                 stage,
                 current_index=processed,
-                total_items=3,
+                total_items=total_steps,
                 items_completed=processed,
                 items_failed=0,
                 message=f"analytics stage completed, rows={total}",
@@ -898,7 +899,7 @@ class ControlOrchestrator:
                 run_id,
                 stage,
                 "running",
-                items_total=3,
+                items_total=total_steps,
                 items_completed=processed,
                 items_failed=0,
             )

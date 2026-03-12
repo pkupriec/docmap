@@ -116,6 +116,7 @@ Geometry source rules:
 - country and region geometries must come from static administrative boundary datasets
 - geometry loading must remain read-only
 - geometry datasets must not be generated heuristically in the frontend
+- geometry dataset preparation should be implemented as an upstream build step (phase 12 decision: analytics-owned generation), not as presentation runtime mutation logic
 
 Fallback rules:
 
@@ -302,6 +303,8 @@ microservice splits
 data mutation pipelines  
 
 The presentation layer is a single read-only service.
+
+The geometry asset generator may exist as code in the repository, but its execution must not introduce presentation write behavior at runtime.
 
 ---
 

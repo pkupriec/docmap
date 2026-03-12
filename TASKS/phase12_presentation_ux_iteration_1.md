@@ -154,6 +154,7 @@ Geometry source:
 
 - countries and regions must be loaded from static administrative boundary assets
 - cities remain coordinate points from BI tables
+- static administrative boundary assets should be prepared upstream (analytics-owned build step) and consumed read-only by presentation runtime
 
 Fallback:
 

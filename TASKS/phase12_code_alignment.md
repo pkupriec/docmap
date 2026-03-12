@@ -11,6 +11,7 @@ Mandatory alignment targets:
 - frontend state model must match `PRESENTATION_UX_SPEC.md`
 - implementation behavior must match `PRESENTATION_ARCHITECTURE.md`
 - tests must be updated if they encode obsolete phase 11 payload shapes
+- geometry asset ownership must be aligned with service boundaries (analytics generates static polygon assets; presentation consumes them read-only)
 
 The agent is expected to modify Python code, frontend code, and tests where required.
 

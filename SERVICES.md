@@ -66,6 +66,16 @@ Responsibilities (`implemented`):
 - truncate/rebuild BI tables from operational data
 - optional step callback with `start_index` support
 
+Responsibilities (`extended in phase 12`):
+- build deterministic static administrative geometry assets for presentation mixed-geometry rendering
+- source geometry build targets from BI locations (`country`, `region`) after BI rebuild is complete
+- publish generated asset for presentation runtime consumption (for example `services/presentation/frontend/src/assets/admin_boundaries.geojson`)
+- produce deterministic ordering and stable output for identical BI input
+
+Constraints:
+- analytics geometry build must not mutate BI or operational tables
+- presentation remains read-only and must not perform runtime geometry generation
+
 ## 5) BigQuery Export
 
 Files: `services/analytics/bigquery_exporter.py`

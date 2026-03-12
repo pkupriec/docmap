@@ -15,12 +15,11 @@ class LocationResponse(BaseModel):
 
 class DocumentCard(BaseModel):
     document_id: str
-    scp_object_id: str | None = None
-    title: str | None = None
-    url: str
-    preview_text: str | None = None
-    evidence_quote: str | None = None
-    mention_count: int
+    scp_number: str
+    canonical_scp_id: str
+    scp_url: str
+    location_display: str | None = None
+    pdf_url: str | None = None
 
 
 class LocationDocumentsResponse(BaseModel):
@@ -46,3 +45,8 @@ class DensityPoint(BaseModel):
     longitude: float
     document_count: int
 
+
+class SearchResponse(BaseModel):
+    query: str
+    documents: list[DocumentCard]
+    locations: list[LocationResponse]

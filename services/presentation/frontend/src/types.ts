@@ -1,3 +1,5 @@
+export type LocationRank = "country" | "region" | "city";
+
 export type Location = {
   location_id: string;
   name: string;
@@ -10,12 +12,11 @@ export type Location = {
 
 export type DocumentCard = {
   document_id: string;
-  scp_object_id: string | null;
-  title: string | null;
-  url: string;
-  preview_text: string | null;
-  evidence_quote: string | null;
-  mention_count: number;
+  scp_number: string;
+  canonical_scp_id: string;
+  scp_url: string;
+  location_display: string | null;
+  pdf_url: string | null;
 };
 
 export type LocationDocumentsResponse = {
@@ -36,3 +37,21 @@ export type DocumentLocation = {
   mention_count: number;
 };
 
+export type SearchResponse = {
+  query: string;
+  documents: DocumentCard[];
+  locations: Location[];
+};
+
+export type MapViewport = {
+  zoom: number;
+  west: number;
+  east: number;
+  south: number;
+  north: number;
+};
+
+export type ScreenPoint = {
+  x: number;
+  y: number;
+};

@@ -1,0 +1,38 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "location_name": "France",
+        "location_rank": "country"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[ -5.2, 51.2 ], [ 8.5, 51.2 ], [ 8.5, 42.2 ], [ -5.2, 42.2 ], [ -5.2, 51.2 ]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "location_name": "Russia",
+        "location_rank": "country"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[ 19.0, 76.0 ], [ 180.0, 76.0 ], [ 180.0, 41.0 ], [ 19.0, 41.0 ], [ 19.0, 76.0 ]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "location_name": "California",
+        "location_rank": "region"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[ -124.6, 42.1 ], [ -114.1, 42.1 ], [ -114.1, 32.4 ], [ -124.6, 32.4 ], [ -124.6, 42.1 ]]]
+      }
+    }
+  ]
+}

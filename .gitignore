@@ -75,5 +75,13 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Playwright
+.playwright/
+.playwright-cli/
+playwright-report/
+test-results/
+blob-report/
+output_playwright_*.png
+
 # OS / tooling
 Thumbs.db

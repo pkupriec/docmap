@@ -159,6 +159,8 @@ Rules:
 - countries and regions may be loaded from static GeoJSON or equivalent static frontend-served assets
 - the presentation API remains read-only
 - the geometry asset set must be deterministic for a given build/runtime state
+- geometry asset generation should be handled upstream (phase 12 decision: analytics-owned build step)
+- presentation runtime loads generated assets but does not generate/refresh them on startup
 
 Backward compatibility note:
 

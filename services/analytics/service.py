@@ -6,10 +6,19 @@ from typing import Callable
 from psycopg import Connection
 
 from services.common.db import get_connection
+from services.analytics.geometry_assets import build_admin_boundaries_asset
 
 logger = logging.getLogger(__name__)
 
 AnalyticsStepCallback = Callable[[str, int], None]
+
+ANALYTICS_STEP_NAMES = [
+    "bi_documents",
+    "bi_locations",
+    "bi_document_locations",
+    "bi_location_hierarchy",
+    "admin_boundaries",
+]
 
 def build_bi_documents(conn: Connection) -> int:
     with conn.cursor() as cur:
@@ -202,6 +211,7 @@ def rebuild_analytics(*, on_step: AnalyticsStepCallback | None = None, start_ind
         ("bi_locations", build_bi_locations),
         ("bi_document_locations", build_bi_document_locations),
         ("bi_location_hierarchy", build_bi_location_hierarchy),
+        ("admin_boundaries", lambda conn: build_admin_boundaries_asset(conn).features_written),
     ]
     if start_index < 0:
         start_index = 0
@@ -212,6 +222,7 @@ def rebuild_analytics(*, on_step: AnalyticsStepCallback | None = None, start_ind
     locations_rows = 0
     links_rows = 0
     hierarchy_rows = 0
+    admin_boundaries_rows = 0
     with get_connection() as conn:
         for idx, (name, fn) in enumerate(steps):
             if idx < start_index:
@@ -223,8 +234,10 @@ def rebuild_analytics(*, on_step: AnalyticsStepCallback | None = None, start_ind
                 locations_rows = rows
             elif name == "bi_document_locations":
                 links_rows = rows
-            else:
+            elif name == "bi_location_hierarchy":
                 hierarchy_rows = rows
+            else:
+                admin_boundaries_rows = rows
             if on_step:
                 on_step(name, rows)
         conn.commit()
@@ -234,6 +247,7 @@ def rebuild_analytics(*, on_step: AnalyticsStepCallback | None = None, start_ind
         "bi_locations": locations_rows,
         "bi_document_locations": links_rows,
         "bi_location_hierarchy": hierarchy_rows,
+        "admin_boundaries": admin_boundaries_rows,
     }
     logger.info("analytics.rebuild_done stats=%s", stats)
     return stats

@@ -68,6 +68,24 @@ Phase 11 delivered:
 - viewport-aware pinned document recomputation
 - mixed geometry rendering for country/region with city points
 
+## Geometry Asset Build Integration (Phase 12 Decision)
+
+To ensure full polygon coverage for discovered country/region locations without changing BI schema:
+
+1. Add analytics-owned geometry asset build step.
+2. Resolve unique BI location targets for `country` and `region`.
+3. Match targets against static administrative boundary source datasets.
+4. Emit deterministic `admin_boundaries.geojson` for presentation frontend.
+5. Emit coverage diagnostics for unmatched targets.
+
+Implementation notes for a fresh agent:
+
+- do not generate polygons in presentation runtime
+- do not move geometry responsibility into geocoder
+- keep presentation read-only; it consumes generated static assets
+- support stable matching keys for regions using `(country, region)` semantics to avoid name collisions
+- preserve polygon-to-point fallback logic in frontend at low zoom
+
 ## Phase 12 Delivery Rules
 
 Phase 12 is a refinement pass, not a frontend rewrite.
