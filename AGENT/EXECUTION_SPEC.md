@@ -139,6 +139,7 @@ The presentation layer must follow these rules:
 6. Search may be introduced only when explicitly authorized by later presentation task files.
 7. Keep the UI desktop-first unless a later task file explicitly changes this.
 8. The presentation layer remains read-only even when later phases add search, mixed geometry, or richer UI behavior.
+9. Later rendering ranks such as `continent` and `ocean` must not extend document fallback beyond `city -> region -> country` unless the user explicitly reopens that decision.
 ---
 
 # Development Strategy
@@ -166,12 +167,18 @@ phase10_control_plane
 phase11_presentation_layer
 phase12_presentation_ux_iteration_1
 phase12_code_alignment
+phase13_map_geometry
 
 The agent must execute phases sequentially.
 
 Later task files may extend the scope of earlier phases without invalidating the earlier baseline.
 
 When a later presentation task file conflicts with the phase 11 MVP baseline, the later task file governs that later implementation phase.
+
+Markdown governance:
+
+- `GPT-5.4` may update markdown task/spec files.
+- other models must treat markdown as authoritative input and should not rewrite it unless the user explicitly instructs otherwise.
 
 Do not skip phases.
 

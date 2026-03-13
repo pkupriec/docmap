@@ -26,7 +26,7 @@ def get_unprocessed_snapshot_ids(conn: Connection, limit: int = 100, offset: int
             FROM document_snapshots ds
             LEFT JOIN extraction_runs er ON er.snapshot_id = ds.id
             WHERE er.id IS NULL
-            ORDER BY ds.created_at ASC
+            ORDER BY ds.created_at ASC, ds.id ASC
             LIMIT %s
             OFFSET %s
             """,
@@ -34,6 +34,23 @@ def get_unprocessed_snapshot_ids(conn: Connection, limit: int = 100, offset: int
         )
         snapshot_ids = [str(row[0]) for row in cur.fetchall()]
     logger.info("extractor.pending_snapshots_loaded count=%s limit=%s offset=%s", len(snapshot_ids), limit, offset)
+    return snapshot_ids
+
+
+def get_all_snapshot_ids(conn: Connection, limit: int = 100, offset: int = 0) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ds.id
+            FROM document_snapshots ds
+            ORDER BY ds.created_at ASC, ds.id ASC
+            LIMIT %s
+            OFFSET %s
+            """,
+            (limit, offset),
+        )
+        snapshot_ids = [str(row[0]) for row in cur.fetchall()]
+    logger.info("extractor.all_snapshots_loaded count=%s limit=%s offset=%s", len(snapshot_ids), limit, offset)
     return snapshot_ids
 
 
@@ -50,11 +67,37 @@ def save_extraction_run(
             """
             INSERT INTO extraction_runs (snapshot_id, model, prompt_version, pipeline_version)
             VALUES (%s, %s, %s, %s)
+            ON CONFLICT (snapshot_id) DO UPDATE
+            SET
+                model = EXCLUDED.model,
+                prompt_version = EXCLUDED.prompt_version,
+                pipeline_version = EXCLUDED.pipeline_version,
+                created_at = NOW()
             RETURNING id
             """,
             (snapshot_id, model, prompt_version, pipeline_version),
         )
         return str(cur.fetchone()[0])
+
+
+def clear_mentions_and_links_for_run(conn: Connection, run_id: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM document_locations dl
+            USING location_mentions lm
+            WHERE dl.mention_id = lm.id
+              AND lm.run_id = %s
+            """,
+            (run_id,),
+        )
+        cur.execute(
+            """
+            DELETE FROM location_mentions
+            WHERE run_id = %s
+            """,
+            (run_id,),
+        )
 
 
 def save_location_mentions(conn: Connection, *, run_id: str, payload: ExtractionPayload) -> int:

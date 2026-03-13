@@ -12,6 +12,11 @@ For `full_pipeline`:
 
 Analytics stage includes BI rebuild and, in phase 12, generation of presentation static administrative geometry assets from BI-derived location targets.
 
+Planned phase 13 extension:
+
+- analytics geometry build expands to stable real-geometry assets for `admin_region`, `country`, `continent`, and `ocean`
+- geometry assets remain analytics-owned and presentation-consumed
+
 ## Pipeline Types
 
 Defined in `services/control/constants.py`:
@@ -94,3 +99,4 @@ Command queue type is `retry_stage|retry_run|start_run|cancel_run`.
 
 - `implemented`: presentation service reads BI outputs (`bi_documents`, `bi_locations`, `bi_document_locations`, `bi_location_hierarchy`) in read-only mode.
 - `extended in phase 12`: presentation frontend reads static administrative geometry assets generated during analytics; no runtime geometry generation is performed in presentation startup.
+- `planned in phase 13`: presentation consumes higher-coverage geometry assets matched by stable location identity; document fallback still remains `city -> region -> country`

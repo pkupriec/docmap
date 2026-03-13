@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchDocumentLocations, fetchLocationDocuments, fetchLocations, fetchSearch } from "./api";
+import { fetchBoundaries, fetchDocumentLocations, fetchLocationDocuments, fetchLocations, fetchSearch } from "./api";
 import { MapView } from "./MapView";
 import { PdfThumbnail } from "./PdfThumbnail";
 import type {
+  BoundaryCollection,
   DocumentCard,
   DocumentLocation,
   Location,
@@ -43,9 +44,15 @@ function buildUmbrellaPath(source: ScreenPoint, anchorY: number, target: ScreenP
   return `M ${source.x} ${source.y} L ${source.x} ${anchorY} L ${target.x} ${anchorY} L ${target.x} ${target.y}`;
 }
 
+const EMPTY_BOUNDARIES: BoundaryCollection = {
+  type: "FeatureCollection",
+  features: [],
+};
+
 export default function App() {
   const [status, setStatus] = useState<UiStatus>("loading");
   const [locations, setLocations] = useState<Location[]>([]);
+  const [boundaries, setBoundaries] = useState<BoundaryCollection>(EMPTY_BOUNDARIES);
   const [locationDocuments, setLocationDocuments] = useState<DocumentCard[]>([]);
   const [hoveredLocationId, setHoveredLocationId] = useState<string | null>(null);
   const [pinnedLocationId, setPinnedLocationId] = useState<string | null>(null);
@@ -72,12 +79,13 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchLocations()
-      .then((items) => {
+    Promise.all([fetchLocations(), fetchBoundaries()])
+      .then(([items, nextBoundaries]) => {
         if (cancelled) {
           return;
         }
         setLocations(items.filter((item) => isFiniteCoordinate(item.latitude, item.longitude)));
+        setBoundaries(nextBoundaries);
         setStatus("ready");
       })
       .catch(() => {
@@ -365,6 +373,7 @@ export default function App() {
         <main className="map-panel">
           <MapView
             locations={locations}
+            boundaries={boundaries}
             selectedLocationId={selectedLocationId}
             onHoverLocation={onHoverLocation}
             onClickLocation={onClickLocation}

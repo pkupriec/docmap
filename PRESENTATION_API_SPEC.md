@@ -11,9 +11,13 @@ Base paths:
 
 ## GET `/api/map/locations`
 
-Returns all point locations from `bi_locations` with deterministic ordering.
+Returns all locations from `bi_locations` with deterministic ordering.
 
 Response: `Location[]`
+
+Phase 13 contract addition:
+
+- each location payload should include `location_rank`
 
 ## GET `/api/map/location/{location_id}/documents`
 
@@ -38,6 +42,11 @@ Fallback:
 
 - direct location first
 - if empty: nearest ancestor depth with documents (`city -> region -> country`)
+
+Phase 13 note:
+
+- fallback remains unchanged
+- `continent` and `ocean` are not fallback targets
 
 ## GET `/api/map/document/{document_id}/locations`
 
@@ -72,34 +81,6 @@ Activation rule:
 
 - frontend triggers this endpoint only after input length >= 3
 
-Response:
-
-json
-{
-  "query": "scp-104",
-  "documents": [
-    {
-      "document_id": "uuid",
-      "scp_number": "SCP-1041",
-      "canonical_scp_id": "scp-1041",
-      "scp_url": "https://scp-wiki.wikidot.com/scp-1041",
-      "location_display": "Vladimir, Russia",
-      "pdf_url": "/snapshots/scp-1041.pdf"
-    }
-  ],
-  "locations": [
-    {
-      "location_id": "uuid",
-      "name": "Vladimir, Russia",
-      "latitude": 56.129,
-      "longitude": 40.407,
-      "precision": "city",
-      "document_count": 12,
-      "parent_location_id": "uuid-or-null"
-    }
-  ]
-}
-
 Ordering rules:
 
 - document results must be deterministic
@@ -112,7 +93,6 @@ Deduplication rules:
 - duplicate documents must not appear multiple times
 - duplicate locations must not appear multiple times
 - nested location matches must remain distinct entities, but map-fit logic must deduplicate coordinates when computing viewport fit
-
 
 ## Search Result Viewport Behavior
 
@@ -127,47 +107,39 @@ Rules:
 ## GET `/api/map/document/{document_id}`
 
 Returns a single document card payload suitable for:
+
 - right-panel rendering
 - modal coordination
 - future deep-link support
 
-Response shape must be aligned with the document card contract in `PRESENTATION_DATA_CONTRACT.md`.
+Response shape must align with `PRESENTATION_DATA_CONTRACT.md`.
 
-At minimum, the endpoint must be able to return:
+At minimum, the endpoint must return:
 
-- document_id
-- scp_number
-- canonical_scp_id
-- scp_url
-- location_display
-- pdf_url
-
-Backward compatibility note:
-
-Phase 11 endpoints may remain available during phase 12, but payloads used by the updated document cards may be extended or revised to match `PRESENTATION_DATA_CONTRACT.md`.
-
-The implementation must prioritize the phase 12 document card contract over obsolete phase 11 card field names.
+- `document_id`
+- `scp_number`
+- `canonical_scp_id`
+- `scp_url`
+- `location_display`
+- `pdf_url`
 
 ## Static Geometry Assets
 
-Phase 12 mixed geometry uses static administrative boundary assets.
+Mixed geometry uses static geometry assets.
 
 These assets are not API-mutated resources.
 
 Rules:
 
 - countries and regions may be loaded from static GeoJSON or equivalent static frontend-served assets
+- phase 13 extends this to `continent` and `ocean`
 - the presentation API remains read-only
 - the geometry asset set must be deterministic for a given build/runtime state
-- geometry asset generation should be handled upstream (phase 12 decision: analytics-owned build step)
-- presentation runtime loads generated assets but does not generate/refresh them on startup
+- geometry asset generation must be handled upstream by analytics
+- presentation runtime loads generated assets but does not generate or refresh them on startup
+- geometry assets should be keyed by stable identity such as `location_id`
 
-Backward compatibility note:
+Phase 13 note:
 
-Phase 11 endpoints may remain available during phase 12, but payloads used by the updated document cards may be extended or revised to match `PRESENTATION_DATA_CONTRACT.md`.
-
-The implementation must prioritize the phase 12 document card contract over obsolete phase 11 card field names.
-
-Implementation note:
-
-If existing backend handlers, schemas, or tests do not match this API spec, they must be updated during phase 12 implementation.
+- hierarchy fallback remains `city -> region -> country`
+- `continent` and `ocean` are rendering ranks only and are not fallback targets

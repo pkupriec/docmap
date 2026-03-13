@@ -21,6 +21,18 @@ This guide defines concrete checks for documentation/code consistency.
 - `GET http://localhost:8080/healthz`
 - `GET http://localhost:8080/api/map/locations`
 
+## Planned Phase 13 Geometry Verification
+
+When phase 13 map geometry work is implemented, verify at minimum:
+
+1. geometry asset build produces non-stub coverage diagnostics
+2. `GET /api/map/locations` returns `location_rank` when the contract is updated
+3. cities still render as points
+4. regions, countries, continents, and oceans render as polygons when geometry exists
+5. hierarchy fallback still remains `city -> region -> country`
+6. polygon click behavior matches point click behavior
+7. search, pinned document behavior, and PDF modal remain intact
+
 ## Cross-Checks Performed For This Documentation Refresh
 
 ### Entrypoints

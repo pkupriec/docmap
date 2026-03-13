@@ -72,6 +72,11 @@ Responsibilities (`extended in phase 12`):
 - publish generated asset for presentation runtime consumption (for example `services/presentation/frontend/src/assets/admin_boundaries.geojson`)
 - produce deterministic ordering and stable output for identical BI input
 
+Responsibilities (`planned in phase 13`):
+- extend geometry asset generation to support `continent` and `ocean`
+- match generated geometry to presentation locations by stable identity instead of display-name-only matching
+- emit coverage diagnostics by geometry rank
+
 Constraints:
 - analytics geometry build must not mutate BI or operational tables
 - presentation remains read-only and must not perform runtime geometry generation
@@ -124,6 +129,12 @@ Responsibilities (`extended in phase 12`):
 - support pinned document visualization
 - support mixed geometry rendering for countries/regions with city points
 
+Responsibilities (`planned in phase 13`):
+- render `admin_region`, `country`, `continent`, and `ocean` as real polygon geometry when available
+- preserve `city` as point rendering
+- consume geometry assets keyed by stable location identity
+- preserve current hierarchy fallback without extending it to `continent` or `ocean`
+
 Behavior:
 - reads BI tables only
 - must not write to any operational or BI table
@@ -143,5 +154,6 @@ These updates remain within the presentation service boundary and do not violate
 Notable limits:
 - `implemented`: phase 11 MVP started with point geometries only
 - `extended in phase 12`: mixed geometry is allowed for country/region polygons with city points
+- `planned`: phase 13 broadens geometry coverage and identity matching for non-city polygons
 - `extended in phase 12`: API-backed search is part of the presentation layer
 - `implemented`: desktop-first UX (mobile is out of scope for the current phase)

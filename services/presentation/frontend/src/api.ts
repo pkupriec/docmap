@@ -1,4 +1,5 @@
 import type {
+  BoundaryCollection,
   DocumentCard,
   DocumentLocation,
   Location,
@@ -16,6 +17,10 @@ async function getJson<T>(path: string): Promise<T> {
 
 export function fetchLocations(): Promise<Location[]> {
   return getJson<Location[]>("/api/map/locations");
+}
+
+export function fetchBoundaries(): Promise<BoundaryCollection> {
+  return getJson<BoundaryCollection>("/api/map/boundaries");
 }
 
 export function fetchLocationDocuments(locationId: string): Promise<LocationDocumentsResponse> {

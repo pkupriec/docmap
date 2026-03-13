@@ -10,6 +10,25 @@ from services.presentation.backend.repository import ResolvedLocation
 
 
 class PresentationRepo:
+    def get_admin_boundaries_geojson(self):
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "location_id": "00000000-0000-0000-0000-000000000001",
+                        "location_rank": "country",
+                        "location_name": "France",
+                    },
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[2.0, 46.0], [3.0, 46.0], [3.0, 47.0], [2.0, 46.0]]],
+                    },
+                }
+            ],
+        }
+
     def list_locations(self):
         return [
             {
@@ -18,6 +37,7 @@ class PresentationRepo:
                 "latitude": 48.8566,
                 "longitude": 2.3522,
                 "precision": "city",
+                "location_rank": "city",
                 "document_count": 3,
                 "parent_location_id": UUID("00000000-0000-0000-0000-000000000011"),
             }
@@ -69,6 +89,7 @@ class PresentationRepo:
                 "latitude": 48.8566,
                 "longitude": 2.3522,
                 "precision": "city",
+                "location_rank": "city",
                 "evidence_quote": "near Paris",
                 "mention_count": 2,
             }
@@ -110,6 +131,7 @@ class PresentationRepo:
                     "latitude": 48.8566,
                     "longitude": 2.3522,
                     "precision": "city",
+                    "location_rank": "city",
                     "document_count": 3,
                     "parent_location_id": UUID("00000000-0000-0000-0000-000000000011"),
                 },
@@ -119,6 +141,7 @@ class PresentationRepo:
                     "latitude": 48.8566,
                     "longitude": 2.3522,
                     "precision": "city",
+                    "location_rank": "city",
                     "document_count": 3,
                     "parent_location_id": UUID("00000000-0000-0000-0000-000000000011"),
                 },
@@ -143,6 +166,19 @@ def test_locations_endpoint(monkeypatch) -> None:
     assert len(payload) == 1
     assert payload[0]["name"] == "Paris, France"
     assert payload[0]["location_id"] == "00000000-0000-0000-0000-000000000001"
+    assert payload[0]["location_rank"] == "city"
+
+
+def test_boundaries_endpoint(monkeypatch) -> None:
+    client = _client(monkeypatch)
+
+    response = client.get("/api/map/boundaries")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["type"] == "FeatureCollection"
+    assert len(payload["features"]) == 1
+    assert payload["features"][0]["properties"]["location_rank"] == "country"
 
 
 def test_location_documents_endpoint(monkeypatch) -> None:
@@ -186,6 +222,7 @@ def test_document_locations_endpoint(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload[0]["name"] == "Paris, France"
+    assert payload[0]["location_rank"] == "city"
 
 
 def test_density_endpoint(monkeypatch) -> None:
@@ -210,6 +247,7 @@ def test_search_endpoint(monkeypatch) -> None:
     assert len(payload["locations"]) == 1
     assert payload["documents"][0]["scp_number"] == "SCP-101"
     assert payload["locations"][0]["name"] == "Paris, France"
+    assert payload["locations"][0]["location_rank"] == "city"
 
 
 def test_search_limit_validation(monkeypatch) -> None:

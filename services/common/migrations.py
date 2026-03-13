@@ -28,6 +28,7 @@ TABLE_DROP_ORDER = (
     "pipeline_runs",
     # BI
     "bi_document_locations",
+    "bi_admin_boundaries",
     "bi_locations",
     "bi_documents",
     # Operational
@@ -115,8 +116,68 @@ def _apply_runtime_schema_patches() -> None:
             )
             cur.execute(
                 """
+                ALTER TABLE IF EXISTS bi_locations
+                ADD COLUMN IF NOT EXISTS location_rank TEXT
+                """
+            )
+            cur.execute(
+                """
                 ALTER TABLE IF EXISTS bi_document_locations
                 ADD COLUMN IF NOT EXISTS evidence_quote TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS location_rank TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS osm_type TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS osm_id BIGINT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS osm_category TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS osm_place_type TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS osm_addresstype TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS osm_place_rank INTEGER
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS osm_boundingbox JSONB
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_geo_locations_osm_identity
+                ON geo_locations(osm_type, osm_id)
                 """
             )
             cur.execute(
@@ -134,6 +195,22 @@ def _apply_runtime_schema_patches() -> None:
                 """
                 CREATE INDEX IF NOT EXISTS idx_bi_location_hierarchy_descendant_depth
                 ON bi_location_hierarchy(descendant_location_id, depth)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bi_admin_boundaries (
+                    location_id UUID PRIMARY KEY REFERENCES geo_locations(id),
+                    location_rank TEXT NOT NULL,
+                    feature_json JSONB NOT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bi_admin_boundaries_rank
+                ON bi_admin_boundaries(location_rank)
                 """
             )
 

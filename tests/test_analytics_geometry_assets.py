@@ -2,40 +2,14 @@ from __future__ import annotations
 
 import json
 
-from services.analytics.geometry_assets import build_admin_boundaries_asset
+from services.analytics import geometry_assets
+from services.analytics.geometry_assets import GeometryTarget, build_admin_boundaries_asset
 
 
-class _DummyCursor:
-    def __init__(self, country_rows, region_rows) -> None:
-        self._country_rows = country_rows
-        self._region_rows = region_rows
-        self._last_sql = ""
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def execute(self, sql: str) -> None:
-        self._last_sql = sql
-
-    def fetchall(self):
-        if "GROUP BY LOWER(TRIM(bl.country))" in self._last_sql and "bl.region" not in self._last_sql:
-            return self._country_rows
-        return self._region_rows
-
-
-class _DummyConn:
-    def __init__(self, country_rows, region_rows) -> None:
-        self._country_rows = country_rows
-        self._region_rows = region_rows
-
-    def cursor(self):
-        return _DummyCursor(self._country_rows, self._region_rows)
-
-
-def test_build_admin_boundaries_asset_generates_geojson_and_coverage(tmp_path) -> None:
+def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_coverage(
+    tmp_path,
+    monkeypatch,
+) -> None:
     source = tmp_path / "source.geojson"
     output = tmp_path / "out.geojson"
     coverage = tmp_path / "coverage.json"
@@ -47,7 +21,11 @@ def test_build_admin_boundaries_asset_generates_geojson_and_coverage(tmp_path) -
                 "features": [
                     {
                         "type": "Feature",
-                        "properties": {"location_rank": "country", "location_name": "France"},
+                        "properties": {
+                            "location_id": "country-1",
+                            "location_rank": "country",
+                            "location_name": "France",
+                        },
                         "geometry": {
                             "type": "Polygon",
                             "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0]]],
@@ -60,10 +38,23 @@ def test_build_admin_boundaries_asset_generates_geojson_and_coverage(tmp_path) -
                             "location_name": "California",
                             "country_name": "United States",
                             "region_name": "California",
+                            "osm_type": "relation",
+                            "osm_id": 44,
                         },
                         "geometry": {
                             "type": "MultiPolygon",
                             "coordinates": [[[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 0.0]]]],
+                        },
+                    },
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "location_rank": "ocean",
+                            "location_name": "Pacific Ocean",
+                        },
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [[[10.0, 10.0], [11.0, 10.0], [11.0, 11.0], [10.0, 10.0]]],
                         },
                     },
                 ],
@@ -72,28 +63,110 @@ def test_build_admin_boundaries_asset_generates_geojson_and_coverage(tmp_path) -
         encoding="utf-8",
     )
 
-    conn = _DummyConn(
-        country_rows=[("france", "France"), ("germany", "Germany")],
-        region_rows=[("united states", "United States", "california", "California")],
+    monkeypatch.setattr(
+        geometry_assets,
+        "_query_targets",
+        lambda _conn: [
+            GeometryTarget(
+                location_id="country-1",
+                location_name="France",
+                location_rank="country",
+                country_name="France",
+                region_name=None,
+                osm_type=None,
+                osm_id=None,
+            ),
+            GeometryTarget(
+                location_id="region-1",
+                location_name="California",
+                location_rank="admin_region",
+                country_name="United States",
+                region_name="California",
+                osm_type="relation",
+                osm_id=44,
+            ),
+            GeometryTarget(
+                location_id="ocean-1",
+                location_name="Pacific Ocean",
+                location_rank="ocean",
+                country_name=None,
+                region_name=None,
+                osm_type=None,
+                osm_id=None,
+            ),
+            GeometryTarget(
+                location_id="continent-1",
+                location_name="Europe",
+                location_rank="continent",
+                country_name=None,
+                region_name=None,
+                osm_type=None,
+                osm_id=None,
+            ),
+        ],
     )
 
+    class DummyCursor:
+        def __init__(self) -> None:
+            self.inserted: list[tuple[str, str, str]] = []
+            self.truncated = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql: str, *args, **kwargs) -> None:
+            if "TRUNCATE TABLE bi_admin_boundaries" in sql:
+                self.truncated = True
+
+        def executemany(self, sql: str, rows) -> None:
+            if "INSERT INTO bi_admin_boundaries" in sql:
+                self.inserted.extend(list(rows))
+
+    class DummyConn:
+        def __init__(self) -> None:
+            self.cursor_instance = DummyCursor()
+
+        def cursor(self) -> DummyCursor:
+            return self.cursor_instance
+
+    conn = DummyConn()
+
     result = build_admin_boundaries_asset(
-        conn,
+        conn=conn,  # type: ignore[arg-type]
         source_path=source,
         output_path=output,
         coverage_path=coverage,
     )
 
-    assert result.features_written == 2
+    assert result.features_written == 3
     assert output.exists()
     assert coverage.exists()
 
     out_payload = json.loads(output.read_text(encoding="utf-8"))
     assert out_payload["type"] == "FeatureCollection"
-    assert len(out_payload["features"]) == 2
-    assert {"country", "region"} == {f["properties"]["location_rank"] for f in out_payload["features"]}
+    assert len(out_payload["features"]) == 3
+    assert {f["properties"]["location_id"] for f in out_payload["features"]} == {
+        "country-1",
+        "region-1",
+        "ocean-1",
+    }
+    assert {f["properties"]["location_rank"] for f in out_payload["features"]} == {
+        "country",
+        "admin_region",
+        "ocean",
+    }
 
     coverage_payload = json.loads(coverage.read_text(encoding="utf-8"))
-    assert coverage_payload["totals"]["matched_countries"] == 1
-    assert coverage_payload["totals"]["matched_regions"] == 1
-    assert coverage_payload["unmatched"]["countries"] == ["Germany"]
+    assert coverage_payload["totals"]["targets"] == 4
+    assert coverage_payload["totals"]["matched_targets"] == 3
+    assert coverage_payload["coverage_by_rank"]["country"]["matched"] == 1
+    assert coverage_payload["coverage_by_rank"]["admin_region"]["matched"] == 1
+    assert coverage_payload["coverage_by_rank"]["ocean"]["matched"] == 1
+    assert coverage_payload["coverage_by_rank"]["continent"]["matched"] == 0
+    assert coverage_payload["unmatched"]["continent"] == ["Europe"]
+    assert conn.cursor_instance.truncated is True
+    assert len(conn.cursor_instance.inserted) == 3
+    assert {row[0] for row in conn.cursor_instance.inserted} == {"country-1", "region-1", "ocean-1"}

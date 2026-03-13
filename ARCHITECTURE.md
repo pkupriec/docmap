@@ -49,6 +49,8 @@ Presentation flow:
 - map-first interface using location points and document links
 - does not write to operational or BI tables
 - does not perform extraction, normalization, or geocoding
+- `partial`: current mixed geometry support relies on sparse static assets and fragile display-name matching
+- `planned`: phase 13 extends presentation rendering to reliable real geometry for `admin_region`, `country`, `continent`, and `ocean` while preserving `city` points
 
 ## Concurrency Model
 
@@ -87,3 +89,11 @@ Presentation flow:
   - `pgadmin`
 - `planned`: production deployment topology and hardening are not codified yet
 - `implemented`: dedicated presentation service/container (`Dockerfile.presentation`, `main_presentation.py`)
+
+## Geometry Asset Model
+
+- `implemented`: analytics owns static geometry asset generation for presentation runtime consumption
+- `implemented`: presentation runtime consumes prebuilt geometry assets read-only
+- `partial`: current asset coverage is insufficient for broad real-geometry rendering
+- `planned`: phase 13 introduces stable geometry matching keyed by location identity rather than display-name string matching
+- `planned`: hierarchy fallback remains `city -> region -> country`; `continent` and `ocean` are rendering ranks only

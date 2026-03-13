@@ -1,4 +1,4 @@
-# PRESENTATION_UX_SPEC.md
+# Presentation UX Spec
 
 ## Layout
 
@@ -10,8 +10,6 @@ The interface consists of three regions:
 
 The layout is desktop-first.
 
----
-
 ## Left Control Panel
 
 The left panel contains map-related controls and future layer controls.
@@ -21,8 +19,6 @@ Phase 12 requirements:
 - the panel must support collapsed and expanded states
 - the collapsed state must remain visible as a thin vertical bar
 - the collapsed bar is reserved for future layer icons
-
----
 
 ## Map Viewport
 
@@ -35,8 +31,6 @@ The map displays:
 - document-link visualization
 - optional overlays such as density
 
----
-
 ## Right Document Panel
 
 The right panel displays one of these content modes:
@@ -48,8 +42,6 @@ The right panel displays one of these content modes:
 - error state
 
 Search results replace location-driven content while search is active.
-
----
 
 ## Interaction State Model
 
@@ -67,21 +59,19 @@ The UI supports these states:
 
 State precedence:
 
-1. pdf_modal
-2. pinned_document
-3. document_hover
-4. search_results
-5. pinned_location
-6. hover_location
-7. idle
+1. `pdf_modal`
+2. `pinned_document`
+3. `document_hover`
+4. `search_results`
+5. `pinned_location`
+6. `hover_location`
+7. `idle`
 
 Notes:
 
-- search_results replaces right-panel content, but the map remains interactive
-- pinned_document must survive map drag and viewport updates
-- pdf_modal must not destroy pinned_document state unless another document is selected
-
----
+- search results replace right-panel content, but the map remains interactive
+- pinned document must survive map drag and viewport updates
+- pdf modal must not destroy pinned document state unless another document is selected
 
 ## Hover and Pin Behavior
 
@@ -101,9 +91,9 @@ Pinned location behavior:
 - the right panel remains fixed
 - map drag remains available
 - reset sources:
-  - Esc
+  - `Esc`
   - empty-map click
-  - Clear button
+  - `Clear` button
 
 ### Hover Document Card
 
@@ -128,8 +118,6 @@ Clicking empty map space clears:
 - pinned document
 - pinned location
 
----
-
 ## Search Field
 
 A unified search field is displayed at the top of the right panel.
@@ -142,14 +130,12 @@ Behavior:
 - supports case-insensitive prefix/contains matching over location display fields
 - returns at most 5 suggestions/results
 - search results replace location-driven right-panel content
-- while search is active, hover_location and pinned_location do not replace search results in the right panel
+- while search is active, `hover_location` and `pinned_location` do not replace search results in the right panel
 
 Map synchronization rules:
 
 - a single result centers the map and chooses an appropriate zoom level
 - multiple results fit the result bounding box
-
----
 
 ## Document Card
 
@@ -166,8 +152,6 @@ Behavior:
 - card hover and card pin control map visualization
 
 The card remains vertically stacked in the right-panel column.
-
----
 
 ## PDF Modal
 
@@ -186,8 +170,6 @@ Rendering rules:
 - first-page thumbnails are produced on the client using pdfjs-dist
 - the modal must not navigate away from the presentation UI
 
----
-
 ## Document-Link Visualization
 
 Phase 12 uses umbrella-style document-link visualization.
@@ -205,14 +187,14 @@ Only visible linked locations are rendered as lines in this phase.
 An offscreen linked-location count must be shown in the card or associated UI.
 The offscreen count updates as the viewport changes during pinned-document mode.
 
----
-
 ## Geometry Rendering
 
 The UI supports mixed geometry rendering:
 
 - country -> polygon
 - region -> polygon
+- continent -> polygon
+- ocean -> polygon
 - city -> point
 
 Fallback:
@@ -221,29 +203,26 @@ Fallback:
 
 Click behavior for polygons must match click behavior for the corresponding point location.
 
----
+Hierarchy note:
+
+- document fallback remains `city -> region -> country`
+- `continent` and `ocean` must not be added to right-panel fallback behavior in this task line
 
 ## Empty State
 
 When neither location-driven content nor search results are active, the right panel shows:
 
-"Explore the map to discover SCP documents."
-
----
+`Explore the map to discover SCP documents.`
 
 ## Loading State
 
 The panel shows loading indicators while API-backed content is being fetched.
 
----
-
 ## Error State
 
 API failures show:
 
-"Unable to load data."
-
----
+`Unable to load data.`
 
 ## Performance
 
@@ -253,12 +232,10 @@ Targets:
 - viewport-linked visualization updates remain responsive
 - initial load target: 2 seconds for expected dataset
 
----
-
 ## Accessibility
 
 Minimum keyboard support:
 
-- Esc clears pinned selection
-- Esc closes the PDF modal if open
+- `Esc` clears pinned selection
+- `Esc` closes the PDF modal if open
 - keyboard focus must remain usable for search input and modal close interaction

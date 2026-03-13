@@ -35,7 +35,9 @@ Before writing any code the agent MUST read these documents in this order:
 17. TASKS/phase11_presentation_layer.md
 18. TASKS/phase12_presentation_ux_iteration_1.md
 19. TASKS/phase12_code_alignment.md
-20. TASKS/phase12_execution_checklist.md
+20. TASKS/phase12_execution_checklist
+21. TASKS/phase13_map_geometry.md
+22. AGENT/MAP_GEOMETRY_HANDOFF.md
 
 If conflicts appear, the order above defines priority.
 
@@ -110,18 +112,24 @@ Allowed geometry behavior:
 - country -> polygon
 - region -> polygon
 - city -> point
+- continent -> polygon (phase 13)
+- ocean -> polygon (phase 13)
 
 Geometry source rules:
 
 - country and region geometries must come from static administrative boundary datasets
+- continent and ocean geometries must also come from static upstream datasets in phase 13
 - geometry loading must remain read-only
 - geometry datasets must not be generated heuristically in the frontend
 - geometry dataset preparation should be implemented as an upstream build step (phase 12 decision: analytics-owned generation), not as presentation runtime mutation logic
+- geometry assets should be matched to presentation locations by stable identity, not by display name alone
 
 Fallback rules:
 
 - if a polygon is too small or visually insignificant at the current zoom level, it must be rendered as a point
 - city locations remain points in this phase
+- hierarchy fallback remains `city -> region -> country`
+- `continent` and `ocean` are rendering ranks only and must not be added to fallback logic
 
 Forbidden geometry behavior:
 
@@ -330,6 +338,11 @@ Implementation note:
 If phase 12 contracts require backend/API/schema/test updates, the agent must make those code changes.
 The user restriction in the review process applies to manual edits only and does not prohibit agent-driven implementation changes.
 
+Markdown authority note:
+
+- `GPT-5.4` may update project markdown files.
+- `gpt-5.3-codex` and other non-`GPT-5.4` models must treat markdown as fixed execution instructions and implement code/tests accordingly without rewriting the docs.
+
 ---
 
 # Success Criteria
@@ -348,5 +361,6 @@ The implementation is considered complete when:
 - geometry click behavior matches location marker click behavior
 - API reads BI tables and static geometry assets only
 - no writes occur in the presentation service
+- phase 13 geometry work, when in scope, preserves `city -> region -> country` fallback and treats `continent`/`ocean` as rendering ranks only
 
-The implementation must also update backend schemas, repository/query logic, API handlers, frontend state, and tests wherever required to satisfy the phase 12 contracts.
+The implementation must also update backend schemas, repository/query logic, API handlers, frontend state, and tests wherever required to satisfy the active presentation contracts.

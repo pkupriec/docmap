@@ -12,6 +12,19 @@ import requests
 logger = logging.getLogger(__name__)
 _REQUEST_LOCK = threading.Lock()
 _LAST_REQUEST_AT = 0.0
+_OCEAN_TOKENS = (
+    "ocean",
+    "sea",
+    "gulf",
+    "bay",
+    "strait",
+    "channel",
+    "fjord",
+)
+_OCEAN_TOKEN_PATTERN = re.compile(
+    r"(?<![a-z0-9])(?:%s)(?![a-z0-9])" % "|".join(re.escape(token) for token in _OCEAN_TOKENS),
+    flags=re.IGNORECASE,
+)
 
 
 def _get_min_interval_seconds() -> float:
@@ -81,6 +94,90 @@ def _build_query_variants(name: str) -> list[str]:
         seen.add(key)
         deduped.append(normalized)
     return deduped
+
+
+def _as_int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def _normalize_boundingbox(value: Any) -> list[float] | None:
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    result: list[float] = []
+    for item in value:
+        try:
+            result.append(float(item))
+        except (TypeError, ValueError):
+            return None
+    return result
+
+
+def infer_location_rank(
+    *,
+    normalized_location: str | None = None,
+    city: str | None,
+    region: str | None,
+    country: str | None,
+    category: str | None,
+    place_type: str | None,
+    addresstype: str | None,
+) -> str:
+    normalized_category = _normalize_text(category)
+    normalized_type = _normalize_text(place_type)
+    normalized_addresstype = _normalize_text(addresstype)
+    normalized_name = _normalize_text(normalized_location)
+    continent_names = {
+        "africa",
+        "antarctica",
+        "asia",
+        "europe",
+        "north america",
+        "south america",
+        "oceania",
+        "australia",
+    }
+
+    if (
+        normalized_type in _OCEAN_TOKENS
+        or normalized_addresstype in _OCEAN_TOKENS
+        or (normalized_category == "natural" and normalized_type in _OCEAN_TOKENS)
+        or _matches_ocean_token(normalized_name)
+    ):
+        return "ocean"
+
+    if (
+        normalized_type == "continent"
+        or normalized_addresstype == "continent"
+        or normalized_name in continent_names
+    ):
+        return "continent"
+
+    if city:
+        return "city"
+    if region:
+        return "admin_region"
+    if country:
+        return "country"
+    return "unknown"
+
+
+def _matches_ocean_token(normalized_name: str) -> bool:
+    if not normalized_name:
+        return False
+    return _OCEAN_TOKEN_PATTERN.search(normalized_name) is not None
 
 
 def geocode_location(
@@ -177,6 +274,13 @@ def normalize_geocoder_response(normalized_location: str, payload: dict[str, Any
         or address.get("state_district")
     )
     country = address.get("country")
+    osm_type = payload.get("osm_type")
+    osm_id = _as_int_or_none(payload.get("osm_id"))
+    category = payload.get("category") or payload.get("class")
+    place_type = payload.get("type")
+    addresstype = payload.get("addresstype")
+    place_rank = _as_int_or_none(payload.get("place_rank"))
+    boundingbox = _normalize_boundingbox(payload.get("boundingbox"))
 
     latitude = float(payload["lat"])
     longitude = float(payload["lon"])
@@ -189,6 +293,22 @@ def normalize_geocoder_response(normalized_location: str, payload: dict[str, Any
         "latitude": latitude,
         "longitude": longitude,
         "precision": infer_precision(city=city, region=region, country=country),
+        "location_rank": infer_location_rank(
+            normalized_location=normalized_location,
+            city=city,
+            region=region,
+            country=country,
+            category=str(category) if category is not None else None,
+            place_type=str(place_type) if place_type is not None else None,
+            addresstype=str(addresstype) if addresstype is not None else None,
+        ),
+        "osm_type": str(osm_type) if osm_type is not None else None,
+        "osm_id": osm_id,
+        "osm_category": str(category) if category is not None else None,
+        "osm_place_type": str(place_type) if place_type is not None else None,
+        "osm_addresstype": str(addresstype) if addresstype is not None else None,
+        "osm_place_rank": place_rank,
+        "osm_boundingbox": boundingbox,
     }
 
 

@@ -2,8 +2,7 @@
 
 ## Scope
 
-This contract includes phase 12 target fields.
-Fields not yet present in the phase 11 implementation must be added by the phase 12 implementation.
+This contract includes the phase 12 implemented target fields and the phase 13 planned geometry extensions.
 
 All IDs are UUID strings in API payloads.
 
@@ -25,8 +24,18 @@ Fields:
 - `latitude` (float)
 - `longitude` (float)
 - `precision` (string|null)
+- `location_rank` (string|null, planned in phase 13)
 - `document_count` (int)
 - `parent_location_id` (UUID|null)
+
+Planned `location_rank` values:
+
+- `city`
+- `admin_region`
+- `country`
+- `continent`
+- `ocean`
+- `unknown`
 
 ## Document Card Contract
 
@@ -38,7 +47,7 @@ Fields returned by API:
 - `scp_number` (string)
 - `canonical_scp_id` (string)
 - `scp_url` (string)
-- `location_display` (string)
+- `location_display` (string|null)
 - `pdf_url` (string|null)
 
 Derived in frontend:
@@ -53,9 +62,7 @@ Notes:
 
 Migration note:
 
-Older phase 11 payload fields such as title-oriented or preview-text-oriented card shapes are not authoritative for phase 12 document cards.
-
-Backend responses and tests may need to be updated to align with this contract.
+Older phase 11 payload fields such as title-oriented or preview-text-oriented card shapes are not authoritative for phase 12+ document cards.
 
 ## Document-Location Link Contract
 
@@ -69,6 +76,7 @@ Fields:
 - `latitude` (float)
 - `longitude` (float)
 - `precision` (string|null)
+- `location_rank` (string|null, planned in phase 13)
 - `evidence_quote` (string|null)
 - `mention_count` (int)
 
@@ -97,6 +105,11 @@ Depth semantics:
 - `fallback_depth` (int|null)
 - `items` (`DocumentCard[]`)
 
+Fallback semantics remain:
+
+- `city -> region -> country`
+
+`continent` and `ocean` are not fallback targets in phase 13.
 
 ## Search Result Contract
 
@@ -118,6 +131,7 @@ Source: presentation API search response
 - `latitude` (float)
 - `longitude` (float)
 - `precision` (string|null)
+- `location_rank` (string|null, planned in phase 13)
 - `document_count` (int)
 - `parent_location_id` (UUID|null)
 
@@ -128,6 +142,13 @@ Phase 12 rendering may use either:
 - point geometry from BI location coordinates
 - static polygon geometry for countries and regions
 
+Phase 13 extends static polygon geometry to:
+
+- admin regions
+- countries
+- continents
+- oceans
+
 The BI contract remains coordinate-based.
 
 Polygon geometries are not stored in the current BI contract and are supplied by static assets.
@@ -135,7 +156,14 @@ Polygon geometries are not stored in the current BI contract and are supplied by
 Frontend-visible geometry metadata may include:
 
 - `geometry_kind` (`point` | `polygon`)
-- `location_rank` (`country` | `region` | `city`)
+- `location_rank` (`city` | `admin_region` | `country` | `continent` | `ocean`)
+
+Phase 13 geometry asset requirements:
+
+- geometry assets should be keyed by `location_id`
+- frontend polygon matching by display name alone is not authoritative
+- runtime geometry generation in presentation is not allowed
+- hierarchy fallback remains `city -> region -> country`
 
 ## Runtime Visualization State
 
@@ -146,7 +174,3 @@ The following values are UI runtime state, not persisted API fields:
 - `offscreen_location_count`
 - `search_active`
 - `pdf_modal_document_id`
-
-Implementation note:
-
-If current backend code or test fixtures still use older card field names, they must be migrated during phase 12 implementation.

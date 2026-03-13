@@ -98,11 +98,22 @@ CREATE TABLE geo_locations (
     latitude DOUBLE PRECISION,
     longitude DOUBLE PRECISION,
     precision TEXT,
+    location_rank TEXT,
+    osm_type TEXT,
+    osm_id BIGINT,
+    osm_category TEXT,
+    osm_place_type TEXT,
+    osm_addresstype TEXT,
+    osm_place_rank INTEGER,
+    osm_boundingbox JSONB,
     geom GEOGRAPHY(Point, 4326)
 );
 
 CREATE INDEX idx_geo_geom
 ON geo_locations USING GIST(geom);
+
+CREATE INDEX idx_geo_locations_osm_identity
+ON geo_locations(osm_type, osm_id);
 
 -- =====================================================
 -- DOCUMENT LOCATIONS
@@ -151,6 +162,7 @@ CREATE TABLE bi_locations (
     latitude DOUBLE PRECISION,
     longitude DOUBLE PRECISION,
     precision TEXT,
+    location_rank TEXT,
     parent_location_id UUID REFERENCES geo_locations(id),
     document_count INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMP NOT NULL DEFAULT now()
@@ -178,3 +190,13 @@ CREATE TABLE bi_location_hierarchy (
 
 CREATE INDEX idx_bi_location_hierarchy_descendant_depth
 ON bi_location_hierarchy(descendant_location_id, depth);
+
+CREATE TABLE bi_admin_boundaries (
+    location_id UUID PRIMARY KEY REFERENCES geo_locations(id),
+    location_rank TEXT NOT NULL,
+    feature_json JSONB NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_bi_admin_boundaries_rank
+ON bi_admin_boundaries(location_rank);

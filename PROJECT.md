@@ -19,6 +19,7 @@ Build a reproducible pipeline that maps SCP documents to real-world locations re
 - `implemented`: control plane API + UI + SSE monitoring
 - `implemented`: stage retry and stage resume controls
 - `implemented`: presentation layer API + dedicated map UI (`services/presentation/*`, container `presentation`)
+  - `partial`: current mixed geometry is limited by low-coverage static assets and name-based matching
 
 ## Partially Implemented Scope
 
@@ -30,6 +31,7 @@ Build a reproducible pipeline that maps SCP documents to real-world locations re
 
 - `planned`: hardened publication playbook for downstream BI consumers (for example Looker)
 - `planned`: deeper platform hardening (auth, queue UX, policy controls)
+- `planned`: phase 13 real-geometry rendering for `admin_region`, `country`, `continent`, and `ocean`, without extending fallback beyond `city -> region -> country`
 
 ## Runtime Model
 

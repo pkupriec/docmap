@@ -28,6 +28,11 @@ phase6_analytics.md
 phase7_bigquery.md
 phase8_scheduler.md
 phase9_pipeline_hardening.md
+phase10_control_plane.md
+phase11_presentation_layer.md
+phase12_presentation_ux_iteration_1.md
+phase12_code_alignment.md
+phase13_map_geometry.md
 
 The agent must implement tasks sequentially.
 
@@ -44,6 +49,11 @@ For each phase:
 The agent must avoid implementing multiple phases at once.
 The agent should treat documented architectural decisions as pre-resolved and focus on implementation details.
 The agent should regulate reasoning conservatively: low for mechanical changes, medium by default, high only for genuinely complex or risky implementation work.
+
+Markdown governance:
+
+- `GPT-5.4` may update project markdown tasks/specifications.
+- other models must use existing markdown as execution input and must not rewrite it unless the user explicitly allows it.
 
 ---
 

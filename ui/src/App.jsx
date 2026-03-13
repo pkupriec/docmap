@@ -219,19 +219,34 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(runDetail.stages || []).map((stage) => (
-                    <tr key={stage.id}>
-                      <td>{stage.stage_order}</td>
-                      <td>{stage.stage_name}</td>
-                      <td>{stage.status}</td>
-                      <td>{stage.items_completed}</td>
-                      <td>{stage.items_failed}</td>
-                      <td>{fmt(stage.started_at)}</td>
-                      <td>{fmt(stage.finished_at)}</td>
-                      <td><button onClick={() => handleCommand(`/runs/${detailRunId}/stages/${stage.stage_name}/retry`, `Retry stage ${stage.stage_name} and downstream?`)}>Retry</button></td>
-                      <td><button onClick={() => handleCommand(`/runs/${detailRunId}/stages/${stage.stage_name}/resume`, `Resume stage ${stage.stage_name} from saved progress?`)}>Resume</button></td>
-                    </tr>
-                  ))}
+                  {(runDetail.stages || []).map((stage) => {
+                    const progress = (runDetail.progress || []).find((item) => item.stage_name === stage.stage_name);
+                    const currentIndex = Number(progress?.current_index || 0);
+                    const totalItems = progress?.total_items == null ? null : Number(progress.total_items);
+                    const exhausted = totalItems != null && totalItems > 0 && currentIndex >= totalItems;
+                    const canResume = currentIndex > 0 && stage.status !== "success" && !exhausted;
+                    return (
+                      <tr key={stage.id}>
+                        <td>{stage.stage_order}</td>
+                        <td>{stage.stage_name}</td>
+                        <td>{stage.status}</td>
+                        <td>{stage.items_completed}</td>
+                        <td>{stage.items_failed}</td>
+                        <td>{fmt(stage.started_at)}</td>
+                        <td>{fmt(stage.finished_at)}</td>
+                        <td><button onClick={() => handleCommand(`/runs/${detailRunId}/stages/${stage.stage_name}/retry`, `Retry stage ${stage.stage_name} and downstream?`)}>Retry</button></td>
+                        <td>
+                          <button
+                            disabled={!canResume}
+                            title={!canResume ? "Resume is available only for partially completed stages" : ""}
+                            onClick={() => handleCommand(`/runs/${detailRunId}/stages/${stage.stage_name}/resume`, `Resume stage ${stage.stage_name} from saved progress?`)}
+                          >
+                            Resume
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
 
@@ -300,11 +315,17 @@ function StartRunModal({ onClose, onSubmit, mode = "default" }) {
   const [document_url, setDocumentUrl] = useState("");
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
+  const [refreshGeoIdentity, setRefreshGeoIdentity] = useState(false);
   const unprocessedMode = mode === "unprocessed";
+  const supportsRefreshGeoIdentity =
+    !unprocessedMode && (pipeline_type === "full_pipeline" || pipeline_type === "geocode_only");
 
   const submit = () => {
     const payload = { pipeline_type, target_scope, options: {} };
     if (unprocessedMode) payload.options.process_unprocessed_only = true;
+    if (supportsRefreshGeoIdentity && refreshGeoIdentity) {
+      payload.options.refresh_geo_identity = true;
+    }
     if (target_scope === "single_document" && document_url) payload.document_url = document_url;
     if (target_scope === "document_range" && rangeStart && rangeEnd) {
       payload.document_range = { start: Number(rangeStart), end: Number(rangeEnd) };
@@ -317,7 +338,7 @@ function StartRunModal({ onClose, onSubmit, mode = "default" }) {
       <div className="modal">
         <h3>{unprocessedMode ? "Process Unprocessed" : "Start Run"}</h3>
         {unprocessedMode ? (
-          <div>Mode: crawl only missing snapshot/PDF and extract only snapshots without extraction runs.</div>
+          <div>Mode: crawl missing snapshot/PDF, extract snapshots without extraction runs, geocode mentions without links.</div>
         ) : null}
         <label>Pipeline Type
           <select value={pipeline_type} onChange={(e) => setPipelineType(e.target.value)}>
@@ -343,6 +364,16 @@ function StartRunModal({ onClose, onSubmit, mode = "default" }) {
             <label>Start<input value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} /></label>
             <label>End<input value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} /></label>
           </div>
+        ) : null}
+        {supportsRefreshGeoIdentity ? (
+          <label>
+            <input
+              type="checkbox"
+              checked={refreshGeoIdentity}
+              onChange={(e) => setRefreshGeoIdentity(e.target.checked)}
+            />
+            Refresh missing geo identity (re-geocode cache rows without rank/OSM identity/bbox)
+          </label>
         ) : null}
         <div className="actions">
           <button onClick={submit}>Submit</button>

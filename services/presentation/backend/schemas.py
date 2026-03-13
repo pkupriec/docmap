@@ -9,6 +9,7 @@ class LocationResponse(BaseModel):
     latitude: float
     longitude: float
     precision: str | None = None
+    location_rank: str | None = None
     document_count: int
     parent_location_id: str | None = None
 
@@ -36,6 +37,7 @@ class DocumentLocationLink(BaseModel):
     latitude: float
     longitude: float
     precision: str | None = None
+    location_rank: str | None = None
     evidence_quote: str | None = None
     mention_count: int
 

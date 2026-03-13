@@ -29,6 +29,7 @@ This document reflects the current SQL schema in:
 ### `geo_locations`
 - resolved normalized locations + PostGIS geography point
 - unique `normalized_location`
+- `planned`: phase 13 may extend this table with stable upstream geo metadata (`osm_type`, `osm_id`, `category`, `type`, `place_rank`, `boundingbox`) and `location_rank`
 
 ### `document_locations`
 - link table between document and geocoded location
@@ -49,6 +50,16 @@ Presentation extensions now implemented in BI schema:
 
 The presentation layer must consume BI projections only.
 Operational tables remain the source of truth for extraction/geocoding stages.
+
+Planned phase 13 BI extensions:
+
+- `bi_locations.location_rank` to distinguish `city`, `admin_region`, `country`, `continent`, `ocean`, `unknown`
+- BI compatibility for geometry asset generation keyed by `location_id`
+
+Planned phase 13 note:
+
+- hierarchy fallback remains `city -> region -> country`
+- `continent` and `ocean` are rendering ranks and not fallback targets
 
 ## Control Plane Tables (`implemented`)
 

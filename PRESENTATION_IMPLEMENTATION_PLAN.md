@@ -12,6 +12,13 @@ Phase 12 introduces the first UX refinement pass for the presentation layer and 
 - pinned document visualization
 - mixed geometry rendering with polygon-to-point fallback
 
+Phase 13 introduces real-geometry map coverage refinement with:
+
+- reliable geometry matching by stable location identity
+- `location_rank`-driven rendering
+- polygon support for `continent` and `ocean`
+- preservation of existing fallback semantics (`city -> region -> country`)
+
 ## Delivered Structure
 
 - backend: `services/presentation/backend/*`
@@ -31,6 +38,8 @@ Phase 11 delivered or relied on:
 
 Phase 12 may extend backend payload shaping without requiring BI write behavior in the presentation service.
 
+Phase 13 is expected to add planned rank/identity support needed for reliable geometry matching.
+
 ## Delivered API
 
 Phase 11 delivered:
@@ -45,6 +54,11 @@ Phase 11 delivered:
 
 - `GET /api/search`
 - any minimal supporting document-card endpoint required by the final implementation
+
+## Phase 13 Planned API Additions
+
+- `location_rank` in location-oriented payloads
+- any minimal contract additions required to support identity-based geometry matching
 
 ## Delivered UX
 
@@ -70,7 +84,7 @@ Phase 11 delivered:
 
 ## Geometry Asset Build Integration (Phase 12 Decision)
 
-To ensure full polygon coverage for discovered country/region locations without changing BI schema:
+To ensure polygon coverage for discovered country/region locations without changing BI schema:
 
 1. Add analytics-owned geometry asset build step.
 2. Resolve unique BI location targets for `country` and `region`.
@@ -78,23 +92,31 @@ To ensure full polygon coverage for discovered country/region locations without 
 4. Emit deterministic `admin_boundaries.geojson` for presentation frontend.
 5. Emit coverage diagnostics for unmatched targets.
 
-Implementation notes for a fresh agent:
+Implementation notes:
 
 - do not generate polygons in presentation runtime
-- do not move geometry responsibility into geocoder
+- do not move geometry responsibility into presentation runtime
 - keep presentation read-only; it consumes generated static assets
 - support stable matching keys for regions using `(country, region)` semantics to avoid name collisions
 - preserve polygon-to-point fallback logic in frontend at low zoom
 
-## Phase 12 Delivery Rules
+## Geometry Asset Build Integration (Phase 13 Extension)
 
-Phase 12 is a refinement pass, not a frontend rewrite.
+Phase 13 implementation must refine the phase 12 geometry approach:
+
+1. Replace stub or low-coverage source data with real upstream geometry datasets.
+2. Match generated geometry to presentation locations using stable identity rather than display name alone.
+3. Extend supported polygon ranks to `admin_region`, `country`, `continent`, and `ocean`.
+4. Keep `city` as point geometry.
+5. Preserve hierarchy fallback as `city -> region -> country` only.
+
+## Delivery Rules
+
+Phase 12 and phase 13 are refinement passes, not frontend rewrites.
 
 The agent must prefer local, incremental changes over replacing the existing presentation frontend architecture.
 
-## Phase 12 Required Code Changes
-
-The phase 12 implementation is expected to modify code, not only documentation.
+## Required Code Changes
 
 At minimum, the implementation may need to update:
 
@@ -104,10 +126,10 @@ At minimum, the implementation may need to update:
 - presentation frontend state and UI components
 - presentation frontend map rendering logic
 - presentation tests
+- analytics geometry asset generation
+- geocoder metadata persistence if needed for stable identity
 
-Phase 12 must not be treated as a docs-only task.
-
-Phase 12 implementation order:
+## Phase 12 Implementation Order
 
 1. update contracts/docs
 2. implement backend search and supporting payload changes
@@ -118,6 +140,17 @@ Phase 12 implementation order:
 7. implement mixed geometry rendering
 8. update tests and verification docs
 
-Backward-compatibility is allowed where useful, but phase 12 contracts are authoritative for the updated UI behavior.
+## Phase 13 Implementation Order
 
-If existing phase 11 payload shapes conflict with phase 12 contracts, the implementation must update the backend and tests accordingly.
+1. update phase 13 contracts/tasks/docs
+2. extend schema and geocoder metadata needed for stable geo identity
+3. extend analytics BI projection and geometry target shaping
+4. rebuild static geometry asset generation with coverage diagnostics
+5. update presentation API/frontend contracts for `location_rank`
+6. switch frontend geometry matching to stable identity
+7. verify polygon rendering and preserved UX behavior
+
+Markdown governance for phase 13:
+
+- `GPT-5.4` may update markdown contracts/tasks/specs.
+- `gpt-5.3-codex` should treat those markdown files as fixed execution instructions while implementing the code.

@@ -23,7 +23,7 @@ Control plane remains separate:
 
 ## Static Geometry Assets
 
-Phase 12 may load static administrative boundary assets for countries and regions.
+Phase 12 loads static administrative boundary assets for countries and regions.
 
 These assets are part of the presentation runtime and must remain separate from BI table mutation logic.
 
@@ -34,6 +34,12 @@ Authoritative phase 12 integration:
 - geometry assets are generated outside presentation runtime as part of analytics-owned data preparation
 - presentation only loads already-generated static assets at runtime
 - geometry generation is deterministic for identical BI inputs and must not depend on UI interactions
+
+Phase 13 extension:
+
+- geometry assets must expand beyond the current early country/region path to cover `admin_region`, `country`, `continent`, and `ocean`
+- generated geometry assets should be keyed by stable location identity such as `location_id`, not by display name alone
+- stable upstream geo metadata may be required in analytics inputs to support reliable matching
 
 ## Data Inputs
 
@@ -55,6 +61,11 @@ Implementation source:
 
 - parent links: `bi_locations.parent_location_id`
 - ancestor mapping: `bi_location_hierarchy`
+
+Phase 13 note:
+
+- `continent` and `ocean` are rendering ranks only
+- they must not participate in document fallback unless the user explicitly changes that decision
 
 ## API Behavior
 
@@ -80,21 +91,24 @@ The presentation layer supports mixed geometry rendering.
 
 Geometry hierarchy:
 
-country → polygon
-region → polygon
-city → point
+- country -> polygon
+- region -> polygon
+- continent -> polygon
+- ocean -> polygon
+- city -> point
 
 Geometry fallback rules:
 
-- if polygon is too small for the current zoom level, it must be rendered as a point.
+- if polygon geometry is too small for the current zoom level, it may be rendered as a point
 
 Click behavior:
 
-- clicking a polygon must behave identically to clicking the corresponding location marker.
+- clicking a polygon must behave identically to clicking the corresponding location marker
 
-Administrative boundary geometries must be loaded from static GeoJSON datasets.
+Administrative boundary geometries must be loaded from static GeoJSON datasets or equivalent static runtime assets.
 
-Countries and regions are rendered as polygons.
+Countries and regions are rendered as polygons in phase 12 when geometry exists.
+Continents and oceans are planned polygon ranks in phase 13.
 
 Cities remain point locations.
 
@@ -113,6 +127,8 @@ Phase 12 extends the interaction model with:
 - pinned document visualization
 - PDF modal viewing
 
+Phase 13 preserves the phase 12 interaction model while extending geometry coverage.
+
 Reset/close sources:
 
 - `Esc`
@@ -122,7 +138,8 @@ Reset/close sources:
 - click outside the PDF modal
 
 ## State-Driven Visualization Rule
-State precedence must follow `PRESENTATION_UX_SPEC.md` and `TASKS/phase12_presentation_ux_iteration_1.md`.
+
+State precedence must follow `PRESENTATION_UX_SPEC.md` and the presentation task files.
 
 Later presentation task files may extend the phase 11 MVP interaction model without rewriting the overall presentation architecture.
 

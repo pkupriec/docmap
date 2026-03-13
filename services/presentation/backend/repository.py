@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -14,6 +15,41 @@ class ResolvedLocation:
 
 
 class PresentationRepository:
+    def get_admin_boundaries_geojson(self) -> dict[str, Any]:
+        sql = """
+            SELECT feature_json
+            FROM bi_admin_boundaries
+            ORDER BY
+                CASE location_rank
+                    WHEN 'country' THEN 0
+                    WHEN 'admin_region' THEN 1
+                    WHEN 'continent' THEN 2
+                    WHEN 'ocean' THEN 3
+                    ELSE 9
+                END,
+                location_id ASC
+        """
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+        features: list[dict[str, Any]] = []
+        for row in rows:
+            payload = row[0]
+            if isinstance(payload, dict):
+                features.append(payload)
+            elif isinstance(payload, (str, bytes, bytearray)):
+                try:
+                    parsed = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    features.append(parsed)
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+        }
+
     def list_locations(self) -> list[dict[str, Any]]:
         sql = """
             SELECT
@@ -22,6 +58,7 @@ class PresentationRepository:
                 bl.latitude,
                 bl.longitude,
                 bl.precision,
+                bl.location_rank,
                 bl.document_count,
                 bl.parent_location_id
             FROM bi_locations bl
@@ -128,6 +165,7 @@ class PresentationRepository:
                 bl.latitude,
                 bl.longitude,
                 bl.precision,
+                bl.location_rank,
                 bdl.evidence_quote,
                 bdl.mention_count
             FROM bi_document_locations bdl
@@ -315,6 +353,7 @@ class PresentationRepository:
                     bl.latitude,
                     bl.longitude,
                     bl.precision,
+                    bl.location_rank,
                     bl.document_count,
                     bl.parent_location_id,
                     CASE
@@ -342,6 +381,7 @@ class PresentationRepository:
                 lm.latitude,
                 lm.longitude,
                 lm.precision,
+                lm.location_rank,
                 lm.document_count,
                 lm.parent_location_id
             FROM location_matches lm

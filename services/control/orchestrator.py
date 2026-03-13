@@ -12,8 +12,14 @@ from services.common.db import get_connection
 from services.control.constants import STAGES_BY_PIPELINE_TYPE, downstream_stages
 from services.control.repository import ControlRepository
 from services.crawler import filter_unprocessed_urls, generate_scp_urls, process_documents
-from services.extractor import process_pending_snapshots
-from services.geocoder import count_pending_mentions, normalize_pending_mentions, process_pending_mentions
+from services.extractor import process_all_snapshots, process_pending_snapshots
+from services.geocoder import (
+    count_all_mentions,
+    count_pending_mentions,
+    normalize_pending_mentions,
+    process_all_mentions,
+    process_pending_mentions,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -37,6 +43,12 @@ def _stage_item_limit() -> int | None:
 
 
 TEST_STAGE_ITEM_LIMIT = _stage_item_limit()
+
+
+def _refresh_geo_identity_requested(run: dict[str, Any]) -> bool:
+    params = run.get("parameters_json") or {}
+    options = params.get("options") or {}
+    return bool(options.get("refresh_geo_identity"))
 
 
 class ControlOrchestrator:
@@ -225,6 +237,37 @@ class ControlOrchestrator:
 
         if payload.get("resume"):
             progress = self.repository.get_progress_entry(run_id, stage_name) or {}
+            stage_row = self.repository.get_stage_run(run_id, stage_name) or {}
+            current_index = int(progress.get("current_index") or 0)
+            total_items = progress.get("total_items")
+            total_items_int = int(total_items) if total_items is not None else None
+            stage_status = str(stage_row.get("status") or "")
+            resume_exhausted = (
+                total_items_int is not None
+                and total_items_int > 0
+                and current_index >= total_items_int
+            )
+            should_resume = current_index > 0 and stage_status != "success" and not resume_exhausted
+
+            if not should_resume:
+                cleared = self.repository.reject_pending_cancel_commands(run_id, reason="stale after stage retry")
+                self.repository.reset_stages_from(run_id, stage_name)
+                self.repository.set_run_status(run_id, "pending", current_stage_name=None, error_message=None, clear_finished=True)
+                self.repository.append_log(
+                    run_id,
+                    stage_name,
+                    "pipeline",
+                    "INFO",
+                    (
+                        f"Resume requested for {stage_name}, but saved progress is exhausted "
+                        f"(index={current_index}, total={total_items_int}); full retry from stage start"
+                    ),
+                    event_type="stage_status",
+                    payload_json={"stages_reset": downstream_stages(stage_name), "cancel_commands_cleared": cleared},
+                )
+                self.repository.complete_command(command["id"], "applied")
+                return
+
             cleared = self.repository.reject_pending_cancel_commands(run_id, reason="stale after stage resume")
             self.repository.reset_stages_after(run_id, stage_name)
             self.repository.set_run_status(run_id, "pending", current_stage_name=None, error_message=None, clear_finished=True)
@@ -288,12 +331,69 @@ class ControlOrchestrator:
 
             self.repository.set_run_status(run_id, "success", current_stage_name=stages[-1])
             self.repository.append_log(run_id, None, "pipeline", "INFO", "Run completed successfully", event_type="run_status")
+            self._enqueue_followup_analytics_if_needed(run_id, run)
             self.repository.prune_logs_keep_last_10_runs()
         except Exception as exc:
             self.repository.set_stage_status(run_id, stage, "failed", error_message=str(exc))
             self.repository.set_run_status(run_id, "failed", current_stage_name=stage, error_message=str(exc))
             self.repository.append_log(run_id, stage, "pipeline", "ERROR", f"Stage failed: {exc}", event_type="stage_status")
             raise
+
+    def _enqueue_followup_analytics_if_needed(self, run_id: int, run: dict[str, Any]) -> None:
+        if run.get("pipeline_type") != "geocode_only":
+            return
+        if not _refresh_geo_identity_requested(run):
+            return
+        params = run.get("parameters_json") or {}
+        options = params.get("options") or {}
+        if bool(options.get("process_unprocessed_only")):
+            return
+
+        payload = {
+            "pipeline_type": "analytics_only",
+            "target_scope": "all",
+            "options": {
+                "auto_started_from_run_id": run_id,
+                "reason": "refresh_geo_identity",
+            },
+        }
+        try:
+            analytics_run_id = self.repository.create_run(
+                pipeline_type="analytics_only",
+                target_scope="all",
+                parameters_json=payload,
+                requested_by="orchestrator:auto",
+                replacement_for_run_id=None,
+                created_by_command_id=None,
+            )
+        except Exception:
+            logger.exception("control.orchestrator.enqueue_analytics_after_geocode_failed run_id=%s", run_id)
+            self.repository.append_log(
+                run_id,
+                "geocode",
+                "pipeline",
+                "ERROR",
+                "Failed to enqueue follow-up analytics_only run for refresh_geo_identity",
+                event_type="run_status",
+            )
+            return
+
+        self.repository.append_log(
+            run_id,
+            "geocode",
+            "pipeline",
+            "INFO",
+            f"Enqueued follow-up analytics_only run #{analytics_run_id} after refresh_geo_identity geocode",
+            event_type="run_status",
+        )
+        self.repository.append_log(
+            analytics_run_id,
+            None,
+            "pipeline",
+            "INFO",
+            f"Run auto-created after geocode run #{run_id} for enriched analytics rebuild",
+            event_type="run_status",
+        )
 
     def _run_stage(self, run_id: int, stage: str, run: dict[str, Any]) -> None:
         if stage == "crawl":
@@ -508,6 +608,15 @@ class ControlOrchestrator:
                     "Unprocessed-only mode enabled: extract scans snapshots without extraction runs",
                     event_type="progress",
                 )
+            else:
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "pipeline",
+                    "INFO",
+                    "Full mode enabled: extract reprocesses all snapshots from the beginning",
+                    event_type="progress",
+                )
 
             def on_extract_snapshot(
                 processed: int,
@@ -605,7 +714,8 @@ class ControlOrchestrator:
                     f"Stage processing limited to first {TEST_STAGE_ITEM_LIMIT} items",
                     event_type="progress",
                 )
-            extracted = process_pending_snapshots(
+            extract_fn = process_pending_snapshots if process_unprocessed_only else process_all_snapshots
+            extracted = extract_fn(
                 limit=extract_limit,
                 offset=start_index,
                 on_snapshot=on_extract_snapshot,
@@ -638,6 +748,10 @@ class ControlOrchestrator:
             start_index = int(progress.get("current_index") or 0)
             base_linked = int(progress.get("items_completed") or 0)
             base_failed = int(progress.get("items_failed") or 0)
+            params = run.get("parameters_json") or {}
+            options = params.get("options") or {}
+            process_unprocessed_only = bool(options.get("process_unprocessed_only"))
+            refresh_geo_identity = bool(options.get("refresh_geo_identity")) and not process_unprocessed_only
             stop_requested = False
             normalized = 0
             normalized_scanned = 0
@@ -700,8 +814,44 @@ class ControlOrchestrator:
                     f"Stage processing limited to first {TEST_STAGE_ITEM_LIMIT} items",
                     event_type="progress",
                 )
+            if process_unprocessed_only:
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "pipeline",
+                    "INFO",
+                    "Unprocessed-only mode enabled: geocode scans mentions without document-location links",
+                    event_type="progress",
+                )
+                if bool(options.get("refresh_geo_identity")):
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "pipeline",
+                        "INFO",
+                        "refresh_geo_identity is ignored in unprocessed mode",
+                        event_type="progress",
+                    )
+            else:
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "pipeline",
+                    "INFO",
+                    "Full mode enabled: geocode reprocesses all mentions from the beginning",
+                    event_type="progress",
+                )
+                if refresh_geo_identity:
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "pipeline",
+                        "INFO",
+                        "refresh_geo_identity enabled: cache entries with missing rank/OSM identity/bbox will be re-geocoded",
+                        event_type="progress",
+                    )
             with get_connection() as conn:
-                pending_total = count_pending_mentions(conn)
+                pending_total = count_pending_mentions(conn) if process_unprocessed_only else count_all_mentions(conn)
             progress_total = max(pending_total, start_index)
             self.repository.append_log(
                 run_id,
@@ -812,12 +962,22 @@ class ControlOrchestrator:
                         current_index=geocode_processed,
                     )
 
-            geo_result = process_pending_mentions(
-                limit=geocode_limit,
-                offset=start_index,
-                on_mention=on_geocode_mention,
-                should_stop=lambda: stop_requested,
-            )
+            if process_unprocessed_only:
+                geo_result = process_pending_mentions(
+                    limit=geocode_limit,
+                    offset=start_index,
+                    on_mention=on_geocode_mention,
+                    should_stop=lambda: stop_requested,
+                )
+            else:
+                geo_result = process_all_mentions(
+                    limit=geocode_limit,
+                    offset=start_index,
+                    reset_existing_links=start_index == 0,
+                    refresh_missing_identity=refresh_geo_identity,
+                    on_mention=on_geocode_mention,
+                    should_stop=lambda: stop_requested,
+                )
             if geocode_total == 0:
                 geocode_total = max(progress_total, start_index + geo_result.processed)
             if geocode_processed == start_index:

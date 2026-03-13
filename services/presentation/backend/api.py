@@ -59,11 +59,18 @@ def get_locations() -> list[dict[str, object]]:
             "latitude": row["latitude"],
             "longitude": row["longitude"],
             "precision": row["precision"],
+            "location_rank": row["location_rank"],
             "document_count": row["document_count"],
             "parent_location_id": _as_str_or_none(row["parent_location_id"]),
         }
         for row in rows
     ]
+
+
+@router.get("/boundaries")
+def get_boundaries() -> dict[str, object]:
+    repo = PresentationRepository()
+    return repo.get_admin_boundaries_geojson()
 
 
 @router.get("/location/{location_id}/documents")
@@ -128,6 +135,7 @@ def get_document_locations(document_id: UUID) -> list[dict[str, object]]:
             "latitude": row["latitude"],
             "longitude": row["longitude"],
             "precision": row["precision"],
+            "location_rank": row["location_rank"],
             "evidence_quote": row["evidence_quote"],
             "mention_count": row["mention_count"],
         }
@@ -167,6 +175,7 @@ def search(
                 "latitude": row["latitude"],
                 "longitude": row["longitude"],
                 "precision": row["precision"],
+                "location_rank": row["location_rank"],
                 "document_count": row["document_count"],
                 "parent_location_id": _as_str_or_none(row["parent_location_id"]),
             }

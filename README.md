@@ -11,9 +11,11 @@ DocMap is an operator-driven data pipeline for SCP Wiki documents:
 - `implemented`: operator UI (`ui/`) with start/cancel/retry/retry-stage/resume-stage
 - `implemented`: crawler/extractor/geocoder/analytics/export services
 - `implemented`: presentation layer service (`services/presentation/*`) with read-only map API + dedicated UI
+- `partial`: presentation mixed geometry exists, but current static boundary coverage is not sufficient for reliable real-geometry rendering
 - `partial`: scheduler exists in code (`services/pipeline/scheduler.py`) but is not started by the main app
 - `partial`: BigQuery export works when GCP env + credentials are configured
 - `planned`: external publication/dashboard automation (Looker operationalization)
+- `planned`: phase 13 real-geometry extension for `admin_region`, `country`, `continent`, and `ocean`, with `city` preserved as point geometry
 
 ## Quick Start (Docker)
 
@@ -61,3 +63,4 @@ Extractor/Ollama behavior is configurable via env vars (see `docs/CONFIGURATION.
 - Repository map: [docs/REPOSITORY_MAP.md](docs/REPOSITORY_MAP.md)
 - Control API: [docs/CONTROL_API.md](docs/CONTROL_API.md)
 - Change history: [CHANGELOG.md](CHANGELOG.md)
+- Map geometry handoff: [AGENT/MAP_GEOMETRY_HANDOFF.md](AGENT/MAP_GEOMETRY_HANDOFF.md)

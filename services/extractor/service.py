@@ -11,6 +11,8 @@ from services.common.db import get_connection
 from services.extractor.ollama_client import run_extraction
 from services.extractor.prompt_builder import build_extraction_prompt
 from services.extractor.repository import (
+    clear_mentions_and_links_for_run,
+    get_all_snapshot_ids,
     get_snapshot_clean_text,
     get_unprocessed_snapshot_ids,
     save_extraction_run,
@@ -62,6 +64,9 @@ def process_snapshot(
             prompt_version=prompt_version,
             pipeline_version=pipeline_version,
         )
+        # Full reprocessing keeps one extraction run per snapshot and replaces
+        # mention/link artifacts for this run deterministically.
+        clear_mentions_and_links_for_run(conn, run_id)
         mentions_count = save_location_mentions(conn, run_id=run_id, payload=payload)
         conn.commit()
 
@@ -88,7 +93,54 @@ def process_pending_snapshots(
     with get_connection() as conn:
         snapshot_ids = get_unprocessed_snapshot_ids(conn, limit=limit, offset=offset)
 
-    logger.info("extractor.batch_start snapshots=%s limit=%s", len(snapshot_ids), limit)
+    logger.info("extractor.batch_start mode=pending snapshots=%s limit=%s offset=%s", len(snapshot_ids), limit, offset)
+    return _process_snapshot_ids(
+        snapshot_ids=snapshot_ids,
+        model=model,
+        prompt_version=prompt_version,
+        pipeline_version=pipeline_version,
+        max_retries=max_retries,
+        on_snapshot=on_snapshot,
+        should_stop=should_stop,
+    )
+
+
+def process_all_snapshots(
+    *,
+    limit: int = 100,
+    model: str = DEFAULT_EXTRACTOR_MODEL,
+    prompt_version: str = "v1",
+    pipeline_version: str = "v1",
+    max_retries: int = 3,
+    offset: int = 0,
+    on_snapshot: SnapshotCallback | None = None,
+    should_stop: StopCallback | None = None,
+) -> list[ExtractionResult]:
+    with get_connection() as conn:
+        snapshot_ids = get_all_snapshot_ids(conn, limit=limit, offset=offset)
+
+    logger.info("extractor.batch_start mode=all snapshots=%s limit=%s offset=%s", len(snapshot_ids), limit, offset)
+    return _process_snapshot_ids(
+        snapshot_ids=snapshot_ids,
+        model=model,
+        prompt_version=prompt_version,
+        pipeline_version=pipeline_version,
+        max_retries=max_retries,
+        on_snapshot=on_snapshot,
+        should_stop=should_stop,
+    )
+
+
+def _process_snapshot_ids(
+    *,
+    snapshot_ids: list[str],
+    model: str,
+    prompt_version: str,
+    pipeline_version: str,
+    max_retries: int,
+    on_snapshot: SnapshotCallback | None,
+    should_stop: StopCallback | None,
+) -> list[ExtractionResult]:
     results: list[ExtractionResult] = []
     failed = 0
     total = len(snapshot_ids)

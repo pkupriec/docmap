@@ -69,6 +69,11 @@ Top-level structure and current role.
 
 Phase documents used as implementation intent/history.
 
+Notable map-geometry planning files:
+
+- `TASKS/phase13_map_geometry.md`
+- `AGENT/MAP_GEOMETRY_HANDOFF.md`
+
 ## `tests/`
 
 Automated test suite for selected behavior.
