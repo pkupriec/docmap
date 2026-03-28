@@ -37,6 +37,17 @@ class CanonicalResolution:
     canonical_id: str | None
     resolution_method: str
     confidence: int
+    reason_code: str | None = None
+    details: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class _CanonicalAliasCandidate:
+    canonical_id: str
+    alias_type: str
+    canonical_name: str
+    parent_canonical_id: str | None
+    country_canonical_id: str | None
 
 
 def _normalize_alias_text(value: str | None) -> str:
@@ -54,6 +65,216 @@ def _normalize_place_type(value: str | None) -> str:
     if normalized == "region":
         return "admin_region"
     return normalized or "unknown"
+
+
+def _alias_type_priority(alias_type: str | None) -> int:
+    normalized = str(alias_type or "").strip().lower()
+    if normalized == "exact_name":
+        return 0
+    if normalized == "language_variant":
+        return 1
+    return 9
+
+
+def _load_alias_candidates(
+    conn: Connection,
+    *,
+    normalized_alias: str,
+    place_type: str,
+) -> list[_CanonicalAliasCandidate]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                a.canonical_id,
+                a.alias_type,
+                p.canonical_name,
+                p.parent_canonical_id,
+                p.country_canonical_id
+            FROM geo_canonical_aliases a
+            JOIN geo_canonical_places p
+              ON p.canonical_id = a.canonical_id
+            WHERE a.normalized_alias = %s
+              AND a.alias_type = ANY(%s)
+              AND p.place_type = %s
+            ORDER BY
+                a.canonical_id,
+                CASE a.alias_type
+                    WHEN 'exact_name' THEN 0
+                    WHEN 'language_variant' THEN 1
+                    ELSE 9
+                END
+            """,
+            (normalized_alias, list(SAFE_ALIAS_TYPES), place_type),
+        )
+        rows = cur.fetchall()
+
+    deduped: dict[str, _CanonicalAliasCandidate] = {}
+    for row in rows:
+        canonical_id = str(row[0]).strip()
+        alias_type = str(row[1]).strip().lower()
+        candidate = _CanonicalAliasCandidate(
+            canonical_id=canonical_id,
+            alias_type=alias_type,
+            canonical_name=str(row[2]).strip(),
+            parent_canonical_id=str(row[3]).strip() if row[3] is not None else None,
+            country_canonical_id=str(row[4]).strip() if row[4] is not None else None,
+        )
+        existing = deduped.get(canonical_id)
+        if existing is None or _alias_type_priority(candidate.alias_type) < _alias_type_priority(existing.alias_type):
+            deduped[canonical_id] = candidate
+    return sorted(deduped.values(), key=lambda item: item.canonical_id)
+
+
+def _load_alias_sets(
+    conn: Connection,
+    canonical_ids: list[str],
+) -> dict[str, set[str]]:
+    if not canonical_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT canonical_id, normalized_alias
+            FROM geo_canonical_aliases
+            WHERE canonical_id = ANY(%s)
+              AND alias_type = ANY(%s)
+            """,
+            (canonical_ids, list(SAFE_ALIAS_TYPES)),
+        )
+        rows = cur.fetchall()
+    alias_sets: dict[str, set[str]] = {candidate_id: set() for candidate_id in canonical_ids}
+    for row in rows:
+        candidate_id = str(row[0]).strip()
+        normalized = _normalize_alias_text(row[1])
+        if not normalized:
+            continue
+        alias_sets.setdefault(candidate_id, set()).add(normalized)
+    return alias_sets
+
+
+def _resolve_ambiguous_alias(
+    conn: Connection,
+    *,
+    normalized_alias: str,
+    payload: dict[str, Any],
+    place_type: str,
+    candidates: list[_CanonicalAliasCandidate],
+) -> CanonicalResolution:
+    candidate_ids = [candidate.canonical_id for candidate in candidates]
+    alias_sets = _load_alias_sets(conn, candidate_ids)
+
+    country_signal = _normalize_alias_text(payload.get("country"))
+    region_signal = _normalize_alias_text(payload.get("region"))
+    ambiguity_floor = 70
+    ambiguity_gap = 20
+
+    country_alias_sets: dict[str, set[str]] = {}
+    country_ids = sorted({candidate.country_canonical_id for candidate in candidates if candidate.country_canonical_id})
+    if country_ids:
+        country_alias_sets = _load_alias_sets(conn, country_ids)
+
+    scored: list[dict[str, Any]] = []
+    for candidate in candidates:
+        score = 0
+        score_breakdown: dict[str, int] = {}
+        aliases = set(alias_sets.get(candidate.canonical_id, set()))
+        candidate_name = _normalize_alias_text(candidate.canonical_name)
+        if candidate_name:
+            aliases.add(candidate_name)
+
+        alias_weight = 35 if candidate.alias_type == "exact_name" else 25
+        score += alias_weight
+        score_breakdown["safe_alias_weight"] = alias_weight
+
+        if candidate_name and candidate_name == normalized_alias:
+            score += 10
+            score_breakdown["canonical_name_exact"] = 10
+
+        if place_type == "country" and country_signal and country_signal != normalized_alias:
+            if country_signal in aliases:
+                score += 55
+                score_breakdown["country_signal_agreement"] = 55
+            else:
+                score -= 30
+                score_breakdown["country_signal_conflict"] = -30
+
+        if place_type == "admin_region":
+            if region_signal and region_signal != normalized_alias:
+                if region_signal in aliases:
+                    score += 20
+                    score_breakdown["region_signal_agreement"] = 20
+                else:
+                    score -= 15
+                    score_breakdown["region_signal_conflict"] = -15
+            if country_signal:
+                parent_country_aliases = set()
+                if candidate.country_canonical_id:
+                    parent_country_aliases.update(country_alias_sets.get(candidate.country_canonical_id, set()))
+                if country_signal in parent_country_aliases:
+                    score += 45
+                    score_breakdown["country_parent_agreement"] = 45
+                elif parent_country_aliases:
+                    score -= 25
+                    score_breakdown["country_parent_conflict"] = -25
+
+        scored.append(
+            {
+                "canonical_id": candidate.canonical_id,
+                "score": score,
+                "alias_type": candidate.alias_type,
+                "score_breakdown": score_breakdown,
+            }
+        )
+
+    scored.sort(key=lambda item: (-int(item["score"]), str(item["canonical_id"])))
+    winner = scored[0]
+    runner_up_score = int(scored[1]["score"]) if len(scored) > 1 else None
+    winner_score = int(winner["score"])
+    score_gap = winner_score - runner_up_score if runner_up_score is not None else winner_score
+
+    details = {
+        "reason_code": "deterministic_disambiguated",
+        "input_alias": normalized_alias,
+        "place_type": place_type,
+        "signals": {
+            "country": country_signal or None,
+            "region": region_signal or None,
+        },
+        "thresholds": {"min_score": ambiguity_floor, "min_gap": ambiguity_gap},
+        "winner_score": winner_score,
+        "runner_up_score": runner_up_score,
+        "score_gap": score_gap,
+        "candidates": scored,
+    }
+
+    if winner_score < ambiguity_floor:
+        details["reason_code"] = "ambiguous_alias_insufficient_signal"
+        return CanonicalResolution(
+            canonical_id=None,
+            resolution_method="ambiguous_alias_insufficient_signal",
+            confidence=0,
+            reason_code="ambiguous_alias_insufficient_signal",
+            details=details,
+        )
+    if runner_up_score is not None and score_gap < ambiguity_gap:
+        details["reason_code"] = "ambiguous_alias_conflicting_signal"
+        return CanonicalResolution(
+            canonical_id=None,
+            resolution_method="ambiguous_alias_conflicting_signal",
+            confidence=0,
+            reason_code="ambiguous_alias_conflicting_signal",
+            details=details,
+        )
+
+    confidence = max(1, min(99, winner_score))
+    return CanonicalResolution(
+        canonical_id=str(winner["canonical_id"]),
+        resolution_method="deterministic_ambiguity_resolver",
+        confidence=confidence,
+        reason_code="deterministic_disambiguated",
+        details=details,
+    )
 
 
 def _resolve_canonical_identity(conn: Connection, payload: dict[str, Any]) -> CanonicalResolution:
@@ -74,43 +295,65 @@ def _resolve_canonical_identity(conn: Connection, payload: dict[str, Any]) -> Ca
             )
             row = cur.fetchone()
             if row and row[0]:
-                return CanonicalResolution(canonical_id=str(row[0]), resolution_method="osm_identity", confidence=100)
+                return CanonicalResolution(
+                    canonical_id=str(row[0]),
+                    resolution_method="osm_identity",
+                    confidence=100,
+                    reason_code="deterministic_disambiguated",
+                    details={
+                        "reason_code": "deterministic_disambiguated",
+                        "strategy": "osm_identity",
+                        "external_source": "osm",
+                        "external_id": external_id,
+                    },
+                )
 
     normalized_alias = _normalize_alias_text(payload.get("normalized_location"))
     if not normalized_alias:
-        return CanonicalResolution(canonical_id=None, resolution_method="none", confidence=0)
-    place_type = _normalize_place_type(payload.get("location_rank"))
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT
-                a.canonical_id,
-                a.alias_type
-            FROM geo_canonical_aliases a
-            JOIN geo_canonical_places p
-              ON p.canonical_id = a.canonical_id
-            WHERE a.normalized_alias = %s
-              AND a.alias_type = ANY(%s)
-              AND p.place_type = %s
-            ORDER BY
-                CASE a.alias_type
-                    WHEN 'exact_name' THEN 0
-                    WHEN 'language_variant' THEN 1
-                    ELSE 9
-                END,
-                a.canonical_id
-            LIMIT 2
-            """,
-            (normalized_alias, list(SAFE_ALIAS_TYPES), place_type),
+        return CanonicalResolution(
+            canonical_id=None,
+            resolution_method="none",
+            confidence=0,
+            reason_code="empty_alias",
+            details={"reason_code": "empty_alias"},
         )
-        rows = cur.fetchall()
-    if len(rows) == 1 and rows[0][0]:
-        alias_type = str(rows[0][1]).strip().lower()
+    place_type = _normalize_place_type(payload.get("location_rank"))
+    candidates = _load_alias_candidates(conn, normalized_alias=normalized_alias, place_type=place_type)
+    if len(candidates) == 1:
+        alias_type = candidates[0].alias_type
         confidence = 75 if alias_type == "exact_name" else 65
-        return CanonicalResolution(canonical_id=str(rows[0][0]), resolution_method="strict_alias", confidence=confidence)
-    if len(rows) > 1:
-        return CanonicalResolution(canonical_id=None, resolution_method="ambiguous_alias", confidence=0)
-    return CanonicalResolution(canonical_id=None, resolution_method="none", confidence=0)
+        return CanonicalResolution(
+            canonical_id=str(candidates[0].canonical_id),
+            resolution_method="strict_alias",
+            confidence=confidence,
+            reason_code="deterministic_disambiguated",
+            details={
+                "reason_code": "deterministic_disambiguated",
+                "strategy": "strict_alias",
+                "input_alias": normalized_alias,
+                "place_type": place_type,
+                "alias_type": alias_type,
+            },
+        )
+    if len(candidates) > 1:
+        return _resolve_ambiguous_alias(
+            conn,
+            normalized_alias=normalized_alias,
+            payload=payload,
+            place_type=place_type,
+            candidates=candidates,
+        )
+    return CanonicalResolution(
+        canonical_id=None,
+        resolution_method="none",
+        confidence=0,
+        reason_code="no_safe_alias_match",
+        details={
+            "reason_code": "no_safe_alias_match",
+            "input_alias": normalized_alias,
+            "place_type": place_type,
+        },
+    )
 
 
 def get_pending_mentions(conn: Connection, *, limit: int = 1000, offset: int = 0) -> list[PendingMention]:
@@ -267,6 +510,11 @@ def _geo_location_payload(location: dict[str, Any]) -> dict[str, Any]:
         "canonical_id": location.get("canonical_id"),
         "canonical_resolution_method": location.get("canonical_resolution_method"),
         "canonical_confidence": location.get("canonical_confidence"),
+        "canonical_resolution_details_json": (
+            json.dumps(location.get("canonical_resolution_details"))
+            if location.get("canonical_resolution_details") is not None
+            else None
+        ),
     }
 
 
@@ -276,6 +524,10 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
     payload["canonical_id"] = canonical.canonical_id
     payload["canonical_resolution_method"] = canonical.resolution_method
     payload["canonical_confidence"] = canonical.confidence
+    payload["canonical_resolution_details"] = canonical.details
+    payload["canonical_resolution_details_json"] = (
+        json.dumps(canonical.details) if canonical.details is not None else None
+    )
     osm_type = payload.get("osm_type")
     osm_id = payload.get("osm_id")
 
@@ -312,6 +564,7 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                         canonical_id = %s,
                         canonical_resolution_method = %s,
                         canonical_confidence = %s,
+                        canonical_resolution_details = %s::jsonb,
                         geom = ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
                     WHERE id = %s
                     RETURNING id
@@ -332,6 +585,7 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                         payload["canonical_id"],
                         payload["canonical_resolution_method"],
                         payload["canonical_confidence"],
+                        payload["canonical_resolution_details_json"],
                         payload["longitude"],
                         payload["latitude"],
                         existing[0],
@@ -361,11 +615,12 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                     canonical_id,
                     canonical_resolution_method,
                     canonical_confidence,
+                    canonical_resolution_details,
                     geom
                 )
             VALUES
                 (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
                 )
             ON CONFLICT (normalized_location) DO UPDATE
@@ -386,6 +641,7 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                 canonical_id = EXCLUDED.canonical_id,
                 canonical_resolution_method = EXCLUDED.canonical_resolution_method,
                 canonical_confidence = EXCLUDED.canonical_confidence,
+                canonical_resolution_details = EXCLUDED.canonical_resolution_details,
                 geom = EXCLUDED.geom
             RETURNING id
             """,
@@ -408,6 +664,7 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                 payload["canonical_id"],
                 payload["canonical_resolution_method"],
                 payload["canonical_confidence"],
+                payload["canonical_resolution_details_json"],
                 payload["longitude"],
                 payload["latitude"],
             ),

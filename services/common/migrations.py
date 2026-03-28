@@ -194,6 +194,12 @@ def _apply_runtime_schema_patches() -> None:
             )
             cur.execute(
                 """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS canonical_resolution_details JSONB
+                """
+            )
+            cur.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_geo_locations_osm_identity
                 ON geo_locations(osm_type, osm_id)
                 """

@@ -109,6 +109,7 @@ CREATE TABLE geo_locations (
     canonical_id TEXT,
     canonical_resolution_method TEXT,
     canonical_confidence SMALLINT,
+    canonical_resolution_details JSONB,
     geom GEOGRAPHY(Point, 4326)
 );
 

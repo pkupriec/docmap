@@ -45,6 +45,8 @@ class GeometryTarget:
     document_count: int
     osm_type: str | None
     osm_id: int | None
+    canonical_resolution_method: str | None
+    canonical_confidence: int | None
 
 
 @dataclass(frozen=True)
@@ -202,7 +204,9 @@ def _query_targets(conn: Connection) -> list[GeometryTarget]:
                 bl.location_rank,
                 gl.osm_type,
                 gl.osm_id,
-                gl.canonical_id
+                gl.canonical_id,
+                gl.canonical_resolution_method,
+                gl.canonical_confidence
             FROM bi_locations bl
             LEFT JOIN geo_locations gl ON gl.id = bl.location_id
             ORDER BY bl.location_id ASC
@@ -237,6 +241,8 @@ def _query_targets(conn: Connection) -> list[GeometryTarget]:
                 document_count=document_count,
                 osm_type=_coerce_text(row[8]),
                 osm_id=_coerce_int(row[9]),
+                canonical_resolution_method=_coerce_text(row[11]),
+                canonical_confidence=_coerce_int(row[12]),
             )
         )
     return _dedupe_alias_targets(targets)
@@ -255,9 +261,17 @@ def _target_alias_key(target: GeometryTarget) -> tuple[str, str, str] | None:
     return None
 
 
-def _target_priority(target: GeometryTarget) -> tuple[int, int, str]:
+def _target_priority(target: GeometryTarget) -> tuple[int, int, int, int, str]:
+    has_canonical = int(bool(target.canonical_id))
     has_osm_identity = int(_osm_key(target.osm_type, target.osm_id) is not None)
-    return (has_osm_identity, int(target.document_count), target.location_id)
+    canonical_confidence = int(target.canonical_confidence or 0)
+    return (
+        has_canonical,
+        canonical_confidence,
+        has_osm_identity,
+        int(target.document_count),
+        target.location_id,
+    )
 
 
 def _dedupe_alias_targets(targets: list[GeometryTarget]) -> list[GeometryTarget]:
@@ -277,11 +291,22 @@ def _dedupe_alias_targets(targets: list[GeometryTarget]) -> list[GeometryTarget]
             continue
         winner = max(group, key=_target_priority)
         dropped = sorted(item.location_id for item in group if item.location_id != winner.location_id)
+        dropped_unresolved_for_resolved = sorted(
+            item.location_id
+            for item in group
+            if item.location_id != winner.location_id and winner.canonical_id and not item.canonical_id
+        )
         logger.warning(
-            "analytics.admin_boundaries_target_alias_collision key=%s kept=%s dropped=%s",
+            (
+                "analytics.admin_boundaries_target_alias_collision key=%s kept=%s "
+                "kept_canonical_id=%s kept_method=%s dropped=%s dropped_unresolved_for_resolved=%s"
+            ),
             key,
             winner.location_id,
+            winner.canonical_id,
+            winner.canonical_resolution_method,
             dropped,
+            dropped_unresolved_for_resolved,
         )
         deduped.append(winner)
     deduped.sort(key=lambda item: item.location_id)

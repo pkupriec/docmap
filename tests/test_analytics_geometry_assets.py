@@ -77,6 +77,8 @@ def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_co
                 document_count=10,
                 osm_type=None,
                 osm_id=None,
+                canonical_resolution_method=None,
+                canonical_confidence=None,
             ),
             GeometryTarget(
                 location_id="region-1",
@@ -88,6 +90,8 @@ def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_co
                 document_count=5,
                 osm_type="relation",
                 osm_id=44,
+                canonical_resolution_method=None,
+                canonical_confidence=None,
             ),
             GeometryTarget(
                 location_id="ocean-1",
@@ -99,6 +103,8 @@ def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_co
                 document_count=1,
                 osm_type=None,
                 osm_id=None,
+                canonical_resolution_method=None,
+                canonical_confidence=None,
             ),
             GeometryTarget(
                 location_id="continent-1",
@@ -110,6 +116,8 @@ def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_co
                 document_count=0,
                 osm_type=None,
                 osm_id=None,
+                canonical_resolution_method=None,
+                canonical_confidence=None,
             ),
         ],
     )
@@ -192,6 +200,8 @@ def test_dedupe_alias_targets_prefers_osm_identity_and_docs() -> None:
             document_count=0,
             osm_type=None,
             osm_id=None,
+            canonical_resolution_method=None,
+            canonical_confidence=None,
         ),
         GeometryTarget(
             location_id="country-docs",
@@ -203,6 +213,8 @@ def test_dedupe_alias_targets_prefers_osm_identity_and_docs() -> None:
             document_count=187,
             osm_type="relation",
             osm_id=60189,
+            canonical_resolution_method=None,
+            canonical_confidence=None,
         ),
     ]
 
@@ -233,6 +245,8 @@ def test_select_feature_prefers_canonical_id_before_alias() -> None:
         document_count=23,
         osm_type=None,
         osm_id=None,
+        canonical_resolution_method="strict_alias",
+        canonical_confidence=75,
     )
     by_location_id, by_canonical_id, by_osm, by_rank_alias, by_region_pair = geometry_assets._index_source_features([feature])
 
@@ -247,3 +261,39 @@ def test_select_feature_prefers_canonical_id_before_alias() -> None:
 
     assert matched is feature
     assert strategy == "canonical_id"
+
+
+def test_dedupe_alias_targets_prefers_canonical_resolved_over_unresolved_high_docs() -> None:
+    targets = [
+        GeometryTarget(
+            location_id="country-congo-unresolved",
+            canonical_id=None,
+            location_name="Congo",
+            location_rank="country",
+            country_name="Congo",
+            region_name=None,
+            document_count=50,
+            osm_type=None,
+            osm_id=None,
+            canonical_resolution_method="ambiguous_alias_insufficient_signal",
+            canonical_confidence=0,
+        ),
+        GeometryTarget(
+            location_id="country-congo-cod",
+            canonical_id="ne:country:COD",
+            location_name="Congo",
+            location_rank="country",
+            country_name="Congo",
+            region_name=None,
+            document_count=7,
+            osm_type=None,
+            osm_id=None,
+            canonical_resolution_method="deterministic_ambiguity_resolver",
+            canonical_confidence=90,
+        ),
+    ]
+
+    deduped = geometry_assets._dedupe_alias_targets(targets)
+
+    assert len(deduped) == 1
+    assert deduped[0].location_id == "country-congo-cod"
