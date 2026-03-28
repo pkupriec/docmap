@@ -2,19 +2,19 @@
 
 ## Scope And Authority
 - Source precedence used for this QA pass:
-  1. `AGENT/EXECUTION_SPEC.md`
-  2. `AGENT/AGENT_RULES.md`
-  3. `AGENT/CODING_CONVENTIONS.md`
-  4. `AGENT/ANTI_PATTERNS.md`
-  5. `ARCHITECTURE.md`
-  6. `SERVICES.md`
-  7. `PIPELINE.md`
-  8. `DATA_MODEL.md`
-  9. `TASKS/phase10_control_plane.md`
-  10. `TASKS/phase11_presentation_layer.md`
-  11. `TASKS/phase12_code_alignment.md`
-  12. `TASKS/phase12_presentation_ux_iteration_1.md`
-  13. `TASKS/phase13_map_geometry.md`
+  1. `docs/archive/legacy-agent/EXECUTION_SPEC.md`
+  2. `docs/archive/legacy-agent/AGENT_RULES.md`
+  3. `docs/agent/CODING_CONVENTIONS.md`
+  4. `docs/agent/ANTI_PATTERNS.md`
+  5. `docs/architecture/ARCHITECTURE.md`
+  6. `docs/architecture/SERVICES.md`
+  7. `docs/architecture/PIPELINE.md`
+  8. `docs/architecture/DATA_MODEL.md`
+  9. `docs/roadmap/phases/phase10_control_plane.md`
+  10. `docs/roadmap/phases/phase11_presentation_layer.md`
+  11. `docs/roadmap/phases/phase12_code_alignment.md`
+  12. `docs/roadmap/phases/phase12_presentation_ux_iteration_1.md`
+  13. `docs/roadmap/phases/phase13_map_geometry.md`
   14. `database/schema.sql`
   15. `infra/docker-compose.yml`
   16. `pyproject.toml`

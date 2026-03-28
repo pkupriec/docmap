@@ -40,7 +40,7 @@
 ## Spec Ambiguities
 
 ### AMBIG-PRES-001
-- Docs in `PRESENTATION_ARCHITECTURE.md` and `PRESENTATION_DATA_CONTRACT.md` describe current behavior as not strictly enforcing fallback rank allowlist, while phase/task authority requires preserved strict fallback semantics (`city -> region -> country`).
+- Docs in `docs/presentation/PRESENTATION_ARCHITECTURE.md` and `PRESENTATION_DATA_CONTRACT.md` describe current behavior as not strictly enforcing fallback rank allowlist, while phase/task authority requires preserved strict fallback semantics (`city -> region -> country`).
 - Resolution used in this QA cycle: treat phase/task + architecture invariants as authoritative and enforce rank guard in implementation.
 
 ## Deferred Non-Blocking Improvements
