@@ -2,6 +2,14 @@
 
 Top-level structure and current role.
 
+## Documentation Layers
+
+- `AGENT/` - compact coding-agent kernel plus routing and extended agent references
+- top-level `*.md` - full system specification
+- top-level `*.summary.md` - concise invariant-focused summaries for coding agents
+- `TASKS/` - scoped phase briefs and handoffs, loaded on demand
+- `docs/` - operator, configuration, verification, and repository-reference material
+
 ## Root
 
 - `main.py` - app entrypoint
@@ -10,6 +18,7 @@ Top-level structure and current role.
 - `Dockerfile` - app image build
 - `Dockerfile.presentation` - presentation image build
 - `README.md` - first-entry documentation
+- `ARCHITECTURE.summary.md`, `SERVICES.summary.md`, `PIPELINE.summary.md`, `DATA_MODEL.summary.md`, `PRESENTATION.summary.md` - compact summary layer
 - `PROJECT.md`, `ARCHITECTURE.md`, `SERVICES.md`, `PIPELINE.md`, `DATA_MODEL.md` - source-of-truth docs
 - `CHANGELOG.md` - repo change log
 

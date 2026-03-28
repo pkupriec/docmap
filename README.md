@@ -4,6 +4,11 @@ DocMap is an operator-driven data pipeline for SCP Wiki documents:
 
 `SCP Wiki -> Crawl -> Extraction (LLM) -> Geocoding -> Analytics -> BigQuery export`
 
+## Documentation Entry Points
+
+- coding agents: start with `AGENT/INDEX.md`
+- general models and humans: start with `README.md`, then the top-level architecture docs
+
 ## Current Status
 
 - `implemented`: operational schema (`database/schema.sql`) and control-plane schema (`database/control_plane.sql`)
@@ -51,11 +56,18 @@ Extractor/Ollama behavior is configurable via env vars (see `docs/CONFIGURATION.
 
 ## Documentation Index
 
+- Agent kernel and routing: [AGENT/INDEX.md](AGENT/INDEX.md)
+- Documentation restructure note: [AGENT/DOC_CONTEXT_RESTRUCTURE.md](AGENT/DOC_CONTEXT_RESTRUCTURE.md)
 - Project scope/status: [PROJECT.md](PROJECT.md)
+- Architecture summary: [ARCHITECTURE.summary.md](ARCHITECTURE.summary.md)
 - Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Service summary: [SERVICES.summary.md](SERVICES.summary.md)
 - Service boundaries: [SERVICES.md](SERVICES.md)
+- Pipeline summary: [PIPELINE.summary.md](PIPELINE.summary.md)
 - Pipeline behavior: [PIPELINE.md](PIPELINE.md)
+- Data model summary: [DATA_MODEL.summary.md](DATA_MODEL.summary.md)
 - Data model: [DATA_MODEL.md](DATA_MODEL.md)
+- Presentation summary: [PRESENTATION.summary.md](PRESENTATION.summary.md)
 - Configuration: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 - Development workflow: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 - Operations runbook: [docs/OPERATIONS.md](docs/OPERATIONS.md)

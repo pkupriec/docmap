@@ -1,5 +1,7 @@
 # Data Model
 
+Coding agents should read `DATA_MODEL.summary.md` first and use `database/schema.sql` as the final schema authority.
+
 This document reflects the current SQL schema in:
 - `database/schema.sql`
 - `database/control_plane.sql`

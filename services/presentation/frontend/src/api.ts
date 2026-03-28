@@ -20,11 +20,22 @@ export function fetchLocations(): Promise<Location[]> {
 }
 
 export function fetchBoundaries(): Promise<BoundaryCollection> {
-  return getJson<BoundaryCollection>("/api/map/boundaries");
+  return getJson<BoundaryCollection>("/api/map/boundaries?lite=1");
 }
 
-export function fetchLocationDocuments(locationId: string): Promise<LocationDocumentsResponse> {
-  return getJson<LocationDocumentsResponse>(`/api/map/location/${locationId}/documents`);
+export function fetchLocationDocuments(
+  locationId: string,
+  options?: { limit?: number; offset?: number },
+): Promise<LocationDocumentsResponse> {
+  const params = new URLSearchParams();
+  if (typeof options?.limit === "number") {
+    params.set("limit", String(options.limit));
+  }
+  if (typeof options?.offset === "number") {
+    params.set("offset", String(options.offset));
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return getJson<LocationDocumentsResponse>(`/api/map/location/${locationId}/documents${suffix}`);
 }
 
 export function fetchDocument(documentId: string): Promise<DocumentCard> {

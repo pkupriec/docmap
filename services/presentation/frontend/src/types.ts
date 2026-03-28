@@ -31,6 +31,12 @@ export type LocationDocumentsResponse = {
   requested_location_id: string;
   resolved_location_id: string | null;
   fallback_depth: number | null;
+  scope_rank: LocationRank | null;
+  scope_location_count: number;
+  total_items: number;
+  returned_items: number;
+  limit: number;
+  offset: number;
   items: DocumentCard[];
 };
 

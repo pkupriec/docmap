@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, FastAPI, Query
+from fastapi import APIRouter, FastAPI, Query, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -48,6 +49,53 @@ def _dedupe_by_id(items: list[dict[str, object]], id_field: str) -> list[dict[st
     return deduped
 
 
+def _build_pdf_response(payload: bytes, request: Request) -> Response:
+    total_size = len(payload)
+    default_headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(total_size),
+    }
+    range_header = request.headers.get("range")
+    if not range_header:
+        return Response(content=payload, media_type="application/pdf", headers=default_headers)
+
+    if not range_header.startswith("bytes="):
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{total_size}"})
+
+    range_spec = range_header[6:].strip()
+    if "," in range_spec:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{total_size}"})
+
+    start_raw, _, end_raw = range_spec.partition("-")
+    if not _:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{total_size}"})
+
+    try:
+        if start_raw == "":
+            suffix_size = int(end_raw)
+            if suffix_size <= 0:
+                return Response(status_code=416, headers={"Content-Range": f"bytes */{total_size}"})
+            start = max(total_size - suffix_size, 0)
+            end = total_size - 1
+        else:
+            start = int(start_raw)
+            end = int(end_raw) if end_raw else total_size - 1
+    except ValueError:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{total_size}"})
+
+    if start < 0 or end < start or start >= total_size:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{total_size}"})
+
+    end = min(end, total_size - 1)
+    chunk = payload[start : end + 1]
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Range": f"bytes {start}-{end}/{total_size}",
+        "Content-Length": str(len(chunk)),
+    }
+    return Response(content=chunk, status_code=206, media_type="application/pdf", headers=headers)
+
+
 @router.get("/locations")
 def get_locations() -> list[dict[str, object]]:
     repo = PresentationRepository()
@@ -68,13 +116,17 @@ def get_locations() -> list[dict[str, object]]:
 
 
 @router.get("/boundaries")
-def get_boundaries() -> dict[str, object]:
+def get_boundaries(lite: bool = Query(default=False)) -> dict[str, object]:
     repo = PresentationRepository()
-    return repo.get_admin_boundaries_geojson()
+    return repo.get_admin_boundaries_geojson(minimal=lite)
 
 
 @router.get("/location/{location_id}/documents")
-def get_location_documents(location_id: UUID) -> dict[str, object]:
+def get_location_documents(
+    location_id: UUID,
+    limit: int = Query(default=100, ge=1, le=300),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
     repo = PresentationRepository()
     resolved = repo.resolve_location_for_documents(location_id)
     if resolved is None:
@@ -82,11 +134,22 @@ def get_location_documents(location_id: UUID) -> dict[str, object]:
             "requested_location_id": str(location_id),
             "resolved_location_id": None,
             "fallback_depth": None,
+            "scope_rank": None,
+            "scope_location_count": 0,
+            "total_items": 0,
+            "returned_items": 0,
+            "limit": limit,
+            "offset": offset,
             "items": [],
         }
 
     resolved_uuid = UUID(resolved.location_id)
-    items = repo.list_location_documents(resolved_uuid)
+    scoped = repo.list_location_documents(
+        resolved_uuid,
+        scope_rank=resolved.location_rank,
+        limit=limit,
+        offset=offset,
+    )
     location_display = repo.get_location_name(resolved_uuid)
     serialized_items = [
         _serialize_document_card(
@@ -95,13 +158,20 @@ def get_location_documents(location_id: UUID) -> dict[str, object]:
                 "location_display": location_display,
             }
         )
-        for item in items
+        for item in scoped.items
     ]
+    deduped_items = _dedupe_by_id(serialized_items, "document_id")
     return {
         "requested_location_id": str(location_id),
         "resolved_location_id": resolved.location_id,
         "fallback_depth": resolved.depth,
-        "items": _dedupe_by_id(serialized_items, "document_id"),
+        "scope_rank": scoped.scope_rank,
+        "scope_location_count": scoped.location_count,
+        "total_items": scoped.total_items,
+        "returned_items": len(deduped_items),
+        "limit": limit,
+        "offset": offset,
+        "items": deduped_items,
     }
 
 
@@ -115,12 +185,12 @@ def get_document(document_id: UUID) -> dict[str, object]:
 
 
 @router.get("/document/{document_id}/pdf")
-def get_document_pdf(document_id: UUID) -> Response:
+def get_document_pdf(document_id: UUID, request: Request) -> Response:
     repo = PresentationRepository()
     payload = repo.get_document_pdf(document_id)
     if payload is None:
         return JSONResponse(status_code=404, content={"error": "not_found"})
-    return Response(content=payload, media_type="application/pdf")
+    return _build_pdf_response(payload, request)
 
 
 @router.get("/document/{document_id}/locations")
@@ -192,6 +262,7 @@ def search(
 
 def create_presentation_app() -> FastAPI:
     app = FastAPI(title="DocMap Presentation API", version="1.0.0")
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.include_router(router)
 
     @app.get("/api/search")

@@ -46,7 +46,6 @@ services:
       PYTHONUNBUFFERED: "1"
       DB_RESET_ON_START: "0"
       DB_DROP_TABLES_ON_START: "0"
-      DOCMAP_STAGE_ITEM_LIMIT: 8000
       GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
       BIGQUERY_DATASET: ${BIGQUERY_DATASET:-}
       BIGQUERY_LOCATION: ${BIGQUERY_LOCATION:-}
@@ -91,6 +90,29 @@ services:
       DB_DROP_TABLES_ON_START: "0"
     ports:
       - "8080:8080"
+
+  canonical-refresh:
+    profiles: ["offline-tools"]
+    build: ..
+    container_name: docmap-canonical-refresh
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://docmap:docmap@postgres:5432/docmap
+      PYTHONUNBUFFERED: "1"
+      CANONICAL_DICTIONARY_INPUT: ${CANONICAL_DICTIONARY_INPUT:-/app/services/geocoder/assets/canonical_dictionary.json}
+      CANONICAL_DICTIONARY_SOURCE: ${CANONICAL_DICTIONARY_SOURCE:-wof}
+      CANONICAL_REFRESH_REPORT_PATH: ${CANONICAL_REFRESH_REPORT_PATH:-/app/docs/qa/canonical_dictionary_refresh_report.json}
+    volumes:
+      - ..:/app
+    working_dir: /app
+    command: >
+      sh -lc "python -m services.geocoder.scripts.refresh_canonical_dictionary
+      --input \"$${CANONICAL_DICTIONARY_INPUT}\"
+      --source \"$${CANONICAL_DICTIONARY_SOURCE}\"
+      --report \"$${CANONICAL_REFRESH_REPORT_PATH}\"
+      --replace-source"
 
   pgadmin:
     image: dpage/pgadmin4:8

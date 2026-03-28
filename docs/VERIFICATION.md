@@ -21,6 +21,18 @@ This guide defines concrete checks for documentation/code consistency.
 - `GET http://localhost:8080/healthz`
 - `GET http://localhost:8080/api/map/locations`
 
+6. Canonical dictionary refresh smoke (phase 16):
+- `docker compose -f infra/docker-compose.yml --profile offline-tools run --rm canonical-refresh`
+- verify report exists at `CANONICAL_REFRESH_REPORT_PATH` and includes:
+  - `counts.places`
+  - `counts.aliases`
+  - `counts.concordances`
+  - `diagnostics.safe_alias_collision_count`
+
+7. Geocode-stage integration check:
+- start a run with `Reload canonical dictionary before geocoding` enabled and verify logs contain a canonical refresh line before mention processing
+- expected log content includes refresh counts (`places`, `aliases`, `concordances`)
+
 ## Planned Phase 13 Geometry Verification
 
 When phase 13 map geometry work is implemented, verify at minimum:

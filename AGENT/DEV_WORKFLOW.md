@@ -1,5 +1,7 @@
 # Development Workflow
 
+Reference note: this workflow guide is an extended reference. Start with `AGENT/INDEX.md` for the default preload and authority order.
+
 This repository is designed for AI-assisted development.
 
 The AI coding agent is responsible for implementing the DocMap system following the architecture defined in this repository.

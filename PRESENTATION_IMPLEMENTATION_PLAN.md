@@ -1,5 +1,7 @@
 # Presentation Implementation Plan
 
+Coding agents should read `PRESENTATION.summary.md` first and load this file only when the task needs phase-scoped presentation delivery intent.
+
 ## Status
 
 Phase 11 MVP is implemented.
@@ -18,6 +20,15 @@ Phase 13 introduces real-geometry map coverage refinement with:
 - `location_rank`-driven rendering
 - polygon support for `continent` and `ocean`
 - preservation of existing fallback semantics (`city -> region -> country`)
+
+Phase 14 introduces visualization clarity refinement with:
+
+- improved map readability and selected-state contrast
+- legend and active-mode indicators
+- search-result readability and feedback cues
+- document-card scanability improvements
+- link-visualization decluttering options
+- accessibility and contextual error-message polish
 
 ## Delivered Structure
 

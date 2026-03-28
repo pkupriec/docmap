@@ -79,3 +79,40 @@ def test_build_bi_document_locations_rolls_up_mentions_to_parent_locations() -> 
     assert "JOIN bi_locations parent ON parent.location_id = e.location_id" in insert_sql
     assert "parent.parent_location_id IS NOT NULL" in insert_sql
     assert "GROUP BY r.document_id, r.location_id" in insert_sql
+
+
+def test_build_bi_location_hierarchy_includes_continent_rollups() -> None:
+    class DummyCursor:
+        def __init__(self) -> None:
+            self.executed_sql: list[str] = []
+            self.rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql: str) -> None:
+            self.executed_sql.append(sql)
+            if "INSERT INTO bi_location_hierarchy" in sql:
+                self.rowcount = 77
+
+    class DummyConn:
+        def __init__(self) -> None:
+            self.cursor_instance = DummyCursor()
+
+        def cursor(self) -> DummyCursor:
+            return self.cursor_instance
+
+    conn = DummyConn()
+
+    rows = service.build_bi_location_hierarchy(conn)  # type: ignore[arg-type]
+
+    assert rows == 77
+    assert any("TRUNCATE TABLE bi_location_hierarchy" in sql for sql in conn.cursor_instance.executed_sql)
+    insert_sql = next(sql for sql in conn.cursor_instance.executed_sql if "INSERT INTO bi_location_hierarchy" in sql)
+    assert "continent_country AS (" in insert_sql
+    assert "ST_Intersects(" in insert_sql
+    assert "ST_GeomFromGeoJSON" in insert_sql
+    assert "all_dedup AS (" in insert_sql

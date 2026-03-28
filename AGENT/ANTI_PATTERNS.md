@@ -1,5 +1,7 @@
 # Architectural Anti-Patterns
 
+Reference note: this file is an extended constraint list. Start with `AGENT/INDEX.md` for the default preload and authority chain.
+
 This document lists architectural mistakes that the AI coding agent must avoid.
 
 These rules exist to preserve the system architecture and prevent design drift during autonomous development.

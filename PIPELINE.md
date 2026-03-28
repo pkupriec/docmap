@@ -1,5 +1,7 @@
 # Pipeline Behavior
 
+Coding agents should read `PIPELINE.summary.md` first and open this file when the task needs full stage and command details.
+
 ## Stage Order
 
 For `full_pipeline`:
@@ -53,12 +55,8 @@ Command queue type is `retry_stage|retry_run|start_run|cancel_run`.
 
 ## Limits and Throughput
 
-- Stage item limit env var: `DOCMAP_STAGE_ITEM_LIMIT`
-- Parsing rules:
-  - unset -> default `20` in code
-  - `""`, `all`, `0` -> no logical limit
-  - positive integer -> explicit limit
-- Current compose sets `DOCMAP_STAGE_ITEM_LIMIT: 8000` (`implemented` runtime default in local stack)
+- Stage execution is no longer globally capped by environment variable.
+- Per-run behavior is controlled by pipeline type, scope, and stage-specific options (for example unprocessed-only mode and resume offsets).
 - Extract stage LLM tuning vars:
   - `EXTRACTOR_MODEL` (default `gpt-oss:20b`)
   - `OLLAMA_TIMEOUT_SECONDS` (default `300`)
@@ -67,9 +65,9 @@ Command queue type is `retry_stage|retry_run|start_run|cancel_run`.
 
 ## Geocode Progress Semantics
 
-- `implemented`: geocode stage may process only up to `DOCMAP_STAGE_ITEM_LIMIT` per run.
-- `implemented`: UI/API `total_items` for geocode reflects real pending backlog at stage start, while logs include the per-run processing limit.
-- `implemented`: normalization sub-step now honors the same per-run limit instead of scanning full backlog when limit is set.
+- `implemented`: geocode stage targets full eligible backlog for the run mode.
+- `implemented`: UI/API `total_items` for geocode reflects real pending backlog at stage start.
+- `implemented`: normalization and geocoding follow the same run mode and resume semantics.
 
 ## Transaction Semantics
 

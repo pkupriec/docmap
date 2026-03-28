@@ -1,11 +1,13 @@
 # Presentation Architecture
 
+Coding agents should read `PRESENTATION.summary.md` first and open this file when the task needs full presentation runtime detail.
+
 ## Role
 
 The presentation layer is an independent read-only visualization service.
 
 Flow:
-`bi_* tables -> presentation API -> presentation UI`
+`analytics-populated BI/runtime tables -> presentation API -> presentation UI`
 
 It does not run pipeline stages and does not write to operational, BI, or control-plane tables.
 
@@ -21,57 +23,63 @@ Control plane remains separate:
 - backend: `main.py` + `services/control/*`
 - frontend: `ui/*`
 
-## Static Geometry Assets
+## Runtime Data Flow
 
-Phase 12 loads static administrative boundary assets for countries and regions.
+Current runtime flow:
 
-These assets are part of the presentation runtime and must remain separate from BI table mutation logic.
+1. analytics populates presentation-facing BI tables, including `bi_locations`, `bi_document_locations`, `bi_location_hierarchy`, and `bi_admin_boundaries`
+2. presentation backend reads those tables and serves JSON/PDF responses
+3. presentation frontend fetches locations and boundaries on startup
+4. the UI moves from `loading` to `ready` only after both startup requests complete successfully
 
-They do not change the BI contract and do not introduce write paths into the presentation service.
-
-Authoritative phase 12 integration:
-
-- geometry assets are generated outside presentation runtime as part of analytics-owned data preparation
-- presentation only loads already-generated static assets at runtime
-- geometry generation is deterministic for identical BI inputs and must not depend on UI interactions
-
-Phase 13 extension:
-
-- geometry assets must expand beyond the current early country/region path to cover `admin_region`, `country`, `continent`, and `ocean`
-- generated geometry assets should be keyed by stable location identity such as `location_id`, not by display name alone
-- stable upstream geo metadata may be required in analytics inputs to support reliable matching
+The current implementation is API-backed at runtime. The frontend does not currently read administrative boundary GeoJSON directly from a static frontend asset path.
 
 ## Data Inputs
 
-Presentation backend reads only:
+Presentation backend currently reads:
 
 - `bi_documents`
 - `bi_locations`
 - `bi_document_locations`
 - `bi_location_hierarchy`
+- `bi_admin_boundaries`
+- `document_snapshots` via `bi_documents.latest_snapshot_id` when serving PDF bytes
+
+## Boundary Delivery Model
+
+Administrative boundaries are currently delivered through presentation API, not by direct static-file fetch in the frontend.
+
+Current behavior:
+
+- `GET /api/map/boundaries` assembles a `FeatureCollection`
+- source table: `bi_admin_boundaries`
+- repository ordering is deterministic by rank bucket, then `location_id`
+- presentation remains read-only at runtime
+
+Upstream generation/population of boundary rows may still happen outside the presentation service, but the current presentation runtime behavior is API delivery from database-backed rows.
 
 ## Hierarchy Fallback
 
 Hierarchy fallback is resolved in backend/API logic, not in frontend heuristics.
 
-Fallback order:
-`city -> region -> country`
+Current implementation:
 
-Implementation source:
+- starts with the requested location itself
+- walks ancestors through `bi_location_hierarchy`
+- returns the nearest depth that has linked documents
+- chooses a deterministic row when multiple candidates share that depth
 
-- parent links: `bi_locations.parent_location_id`
-- ancestor mapping: `bi_location_hierarchy`
+Important constraint:
 
-Phase 13 note:
-
-- `continent` and `ocean` are rendering ranks only
-- they must not participate in document fallback unless the user explicitly changes that decision
+- the code does not currently enforce a hard rank allowlist such as `city -> admin_region -> country`
+- current data shape makes fallback behave like that in practice for normal cases
+- `continent` and `ocean` are currently rendering ranks, not explicitly enforced fallback targets
 
 ## API Behavior
 
-Presentation API is deterministic for identical BI table state:
+Presentation API is deterministic for identical database state:
 
-- stable ordering in all list responses
+- stable ordering in list responses
 - no random sampling
 - no time-dependent shaping
 
@@ -79,81 +87,89 @@ Presentation API is deterministic for identical BI table state:
 
 Search is an API-backed presentation capability.
 
-When search is active:
+Current frontend behavior:
 
-- the right panel is driven by search results instead of location hover/pin results
-- the map remains interactive
-- viewport updates are driven by returned result coordinates
+- search becomes active at `3+` trimmed characters
+- requests are debounced by about `180 ms`
+- while search is active, the right panel is driven by search results instead of location hover/pin results
+- the map remains interactive while search is active
+
+Map focus behavior:
+
+- if search returns location results, map focus is derived from those locations
+- if search returns only documents, the frontend fetches `/api/map/document/{id}/locations` for the matched documents and derives focus coordinates from those linked locations
 
 ## Location Geometry Model
 
-The presentation layer supports mixed geometry rendering.
+The presentation layer currently supports mixed geometry rendering.
 
-Geometry hierarchy:
+Boundary matching in the frontend currently works like this:
 
-- country -> polygon
-- region -> polygon
-- continent -> polygon
-- ocean -> polygon
-- city -> point
+1. try boundary feature `location_id`
+2. if that misses, fall back to `location_rank + lowercased location_name`
 
-Geometry fallback rules:
+That rank/name fallback is implementation reality and should not be documented away.
 
-- if polygon geometry is too small for the current zoom level, it may be rendered as a point
+Current rendering behavior:
+
+- `city`:
+  - polygon when a boundary exists and map zoom is `>= 3.2`
+  - point when zoom is `< 3.2`
+  - point when no boundary matches
+- `admin_region`, `country`, `continent`, `ocean`:
+  - polygon when a boundary exists
+  - point when no boundary matches
+- other/unknown ranks:
+  - point
+
+Current visual fallback semantics:
+
+- missing-boundary non-city points are red
+- city points remain blue when not selected, even if no boundary exists
+- selected point/polygon styling uses the selected accent color
 
 Click behavior:
 
-- clicking a polygon must behave identically to clicking the corresponding location marker
-
-Administrative boundary geometries must be loaded from static GeoJSON datasets or equivalent static runtime assets.
-
-Countries and regions are rendered as polygons in phase 12 when geometry exists.
-Continents and oceans are planned polygon ranks in phase 13.
-
-Cities remain point locations.
+- clicking a polygon behaves the same as clicking the corresponding point location
 
 ## UX Scope
 
 The presentation UI is desktop-first.
 
-Phase 11 baseline interactions:
+Current implemented interactions include:
 
 - hover preview
 - pinned location selection
-
-Phase 12 extends the interaction model with:
-
-- API-backed search results
+- API-backed search
 - pinned document visualization
 - PDF modal viewing
+- left-panel collapse toggle
+- map zoom-level widget
 
-Phase 13 preserves the phase 12 interaction model while extending geometry coverage.
+Reset/close sources in the current implementation:
 
-Reset/close sources:
-
-- `Esc`
-- empty-map click
-- `Clear` button
-- modal close button
-- click outside the PDF modal
+- `Esc`: closes the PDF modal if open and also clears pinned document and pinned location state
+- empty-map click: clears pinned document and pinned location state
+- `Clear` button: clears pinned document, pinned location, and PDF modal state
+- modal close button: closes only the modal
+- click outside the PDF modal: closes only the modal
+- clicking a different document card while a modal is open: closes the current modal
 
 ## State-Driven Visualization Rule
 
-State precedence must follow `PRESENTATION_UX_SPEC.md` and the presentation task files.
+Presentation interactions are state-driven.
 
-Later presentation task files may extend the phase 11 MVP interaction model without rewriting the overall presentation architecture.
+Current frontend state includes at least:
 
-Presentation interactions must be state-driven.
+- `hovered_location_id`
+- `pinned_location_id`
+- `hovered_document_id`
+- `pinned_document_id`
+- `search_query`
+- `search_results`
+- `visible_document_links`
+- `offscreen_link_count`
+- `pdf_modal_document_id`
+- `map_viewport`
 
-At minimum, the frontend architecture must model:
-
-- hovered_location_id
-- pinned_location_id
-- hovered_document_id
-- pinned_document_id
-- search_query
-- search_results
-- visible_document_links
-- pdf_modal_document_id
-
-Rendering must be derived from this state instead of ad hoc DOM-driven logic.
+Rendering is derived from this state rather than from ad hoc DOM-only logic.

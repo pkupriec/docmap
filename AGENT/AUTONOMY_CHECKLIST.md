@@ -1,5 +1,7 @@
 # Autonomous Development Checklist
 
+Reference note: this checklist is loaded on demand. Start with `AGENT/INDEX.md` for the default preload and routing model.
+
 Purpose: define minimum clarity required for low-supervision implementation.
 
 ## Global Readiness Gates

@@ -38,6 +38,43 @@ Restart presentation only:
 - `GET /api/map/overlays/density`
 - `GET /healthz`
 
+## Canonical Dictionary Refresh (Phase 16)
+
+Canonical dictionary refresh is controlled per run from Control UI:
+- Start Run -> select `full_pipeline` or `geocode_only`
+- enable checkbox: `Reload canonical dictionary before geocoding`
+
+When enabled, geocode stage refreshes canonical tables at stage start (index `0`) before normalization/geocoding.
+
+One-shot refresh via compose profile:
+`docker compose -f infra/docker-compose.yml --profile offline-tools run --rm canonical-refresh`
+
+Manual refresh from app container:
+`docker compose -f infra/docker-compose.yml run --rm app sh -lc "python -m services.geocoder.scripts.refresh_canonical_dictionary --input \"$CANONICAL_DICTIONARY_INPUT\" --source \"$CANONICAL_DICTIONARY_SOURCE\" --report \"$CANONICAL_REFRESH_REPORT_PATH\" --replace-source"`
+
+Expected outputs:
+- canonical tables populated/updated: `geo_canonical_places`, `geo_canonical_aliases`, `geo_canonical_concordances`
+- deterministic JSON report at `CANONICAL_REFRESH_REPORT_PATH` with counts and safe-alias collision diagnostics
+
+Controls:
+- `CANONICAL_REFRESH_ON_GEOCODE=1|0` (default `0`, used as fallback when run option is not provided)
+- `CANONICAL_DICTIONARY_INPUT` (default `/app/services/geocoder/assets/canonical_dictionary.json`)
+- `CANONICAL_DICTIONARY_SOURCE` (default `wof`)
+- `CANONICAL_REFRESH_REPLACE_SOURCE=1|0` (default `1`)
+- `CANONICAL_AUTOSEED_ON_EMPTY=1|0` (default `1`; generate initial dictionary when input is missing/empty)
+- `CANONICAL_BUILD_SEED_SOURCE_ON_REFRESH=1|0` (default `1`; geocoder builds seed source when missing/empty)
+- `CANONICAL_SEED_SOURCE` (default `/app/services/geocoder/assets/canonical_seed_source.geojson`)
+
+Seed generation semantics:
+- canonical name comes from source `location_name`
+- safe aliases come from `safe_aliases`/`aliases`
+- unsafe aliases come from `unsafe_aliases` and are tagged `unsafe_parent_ref`
+- canonical IDs come from source `canonical_id` (fallback `seed:<rank>:<normalized_name>`)
+
+Ownership note:
+- geocoder seed source and canonical dictionary refresh are geocoder-owned
+- analytics artifacts are not required by geocode stage for canonical seeding
+
 ## Control API Operations
 
 ### Start run

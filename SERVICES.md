@@ -1,5 +1,7 @@
 # Service Boundaries
 
+Coding agents should read `SERVICES.summary.md` first and open this file when the task needs the full ownership matrix.
+
 This document is authoritative for module ownership and write boundaries.
 
 ## Ownership Matrix

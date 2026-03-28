@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchBoundaries, fetchDocumentLocations, fetchLocationDocuments, fetchLocations, fetchSearch } from "./api";
 import { MapView } from "./MapView";
@@ -15,6 +15,19 @@ import type {
 } from "./types";
 
 type UiStatus = "loading" | "ready" | "error";
+type ErrorContext = "startup" | "location_documents" | "search" | "unknown";
+type ActiveMode =
+  | "PDF Modal"
+  | "Pinned Document"
+  | "Document Hover"
+  | "Search"
+  | "Pinned Location"
+  | "Hover Location"
+  | "Idle";
+
+const EMPTY_SEARCH_RESULTS: SearchResponse = { query: "", documents: [], locations: [] };
+const LINK_DECLUTTER_LIMIT = 12;
+const LOCATION_DOCUMENTS_PAGE_SIZE = 80;
 
 function isFiniteCoordinate(latitude: number, longitude: number): boolean {
   return (
@@ -44,6 +57,39 @@ function buildUmbrellaPath(source: ScreenPoint, anchorY: number, target: ScreenP
   return `M ${source.x} ${source.y} L ${source.x} ${anchorY} L ${target.x} ${anchorY} L ${target.x} ${target.y}`;
 }
 
+function formatRank(rank: string | null | undefined): string {
+  const normalized = String(rank ?? "unknown").toLowerCase();
+  if (normalized === "admin_region" || normalized === "region") {
+    return "Admin";
+  }
+  if (normalized === "country") {
+    return "Country";
+  }
+  if (normalized === "continent") {
+    return "Continent";
+  }
+  if (normalized === "ocean") {
+    return "Ocean";
+  }
+  if (normalized === "city") {
+    return "City";
+  }
+  return "Unknown";
+}
+
+function errorMessageFor(context: ErrorContext): string {
+  if (context === "startup") {
+    return "Unable to load locations and boundaries.";
+  }
+  if (context === "location_documents") {
+    return "Unable to load linked documents for this location.";
+  }
+  if (context === "search") {
+    return "Unable to load search results.";
+  }
+  return "Unable to load data.";
+}
+
 const EMPTY_BOUNDARIES: BoundaryCollection = {
   type: "FeatureCollection",
   features: [],
@@ -51,31 +97,119 @@ const EMPTY_BOUNDARIES: BoundaryCollection = {
 
 export default function App() {
   const [status, setStatus] = useState<UiStatus>("loading");
+  const [errorContext, setErrorContext] = useState<ErrorContext>("unknown");
   const [locations, setLocations] = useState<Location[]>([]);
   const [boundaries, setBoundaries] = useState<BoundaryCollection>(EMPTY_BOUNDARIES);
   const [locationDocuments, setLocationDocuments] = useState<DocumentCard[]>([]);
+  const [locationDocumentsMeta, setLocationDocumentsMeta] = useState<LocationDocumentsResponse | null>(null);
+  const [isLoadingMoreDocuments, setIsLoadingMoreDocuments] = useState(false);
   const [hoveredLocationId, setHoveredLocationId] = useState<string | null>(null);
   const [pinnedLocationId, setPinnedLocationId] = useState<string | null>(null);
   const [hoveredDocumentId, setHoveredDocumentId] = useState<string | null>(null);
   const [pinnedDocumentId, setPinnedDocumentId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResponse>({ query: "", documents: [], locations: [] });
+  const [searchResults, setSearchResults] = useState<SearchResponse>(EMPTY_SEARCH_RESULTS);
   const [visibleDocumentLinks, setVisibleDocumentLinks] = useState<DocumentLocation[]>([]);
   const [pdfModalDocumentId, setPdfModalDocumentId] = useState<string | null>(null);
-  const [fallbackDepth, setFallbackDepth] = useState<number | null>(null);
-  const [mapViewport, setMapViewport] = useState<MapViewport | null>(null);
   const [projector, setProjector] = useState<((longitude: number, latitude: number) => ScreenPoint) | null>(null);
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
   const [offscreenLinkCount, setOffscreenLinkCount] = useState(0);
   const [searchDocumentCoordinates, setSearchDocumentCoordinates] = useState<
     Array<{ latitude: number; longitude: number }>
   >([]);
+  const [declutterLinks, setDeclutterLinks] = useState(true);
 
   const linksByDocumentIdRef = useRef<Record<string, DocumentLocation[]>>({});
+  const pendingDocumentLocationsRef = useRef<Record<string, Promise<DocumentLocation[]>>>({});
+  const locationDocumentsByLocationIdRef = useRef<Record<string, LocationDocumentsResponse>>({});
+  const pendingLocationDocumentsRef = useRef<Record<string, Promise<LocationDocumentsResponse>>>({});
+  const mapViewportRef = useRef<MapViewport | null>(null);
+  const activeVisualizationDocumentIdRef = useRef<string | null>(null);
+  const viewportRafRef = useRef<number | null>(null);
   const cardRefs = useRef<Record<string, HTMLElement | null>>({});
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedLocationId = pinnedLocationId ?? hoveredLocationId;
   const searchActive = searchQuery.trim().length >= 3;
+  const activeVisualizationDocumentId = pinnedDocumentId ?? hoveredDocumentId;
+
+  const fetchLocationDocumentsCached = useCallback(
+    async (locationId: string): Promise<LocationDocumentsResponse> => {
+      const cached = locationDocumentsByLocationIdRef.current[locationId];
+      if (cached) {
+        return cached;
+      }
+
+      const pending = pendingLocationDocumentsRef.current[locationId];
+      if (pending) {
+        return pending;
+      }
+
+      const request = fetchLocationDocuments(locationId, {
+        limit: LOCATION_DOCUMENTS_PAGE_SIZE,
+        offset: 0,
+      })
+        .then((payload) => {
+          locationDocumentsByLocationIdRef.current[locationId] = payload;
+          return payload;
+        })
+        .finally(() => {
+          delete pendingLocationDocumentsRef.current[locationId];
+        });
+
+      pendingLocationDocumentsRef.current[locationId] = request;
+      return request;
+    },
+    [],
+  );
+
+  const fetchDocumentLocationsCached = useCallback(
+    async (documentId: string): Promise<DocumentLocation[]> => {
+      const cached = linksByDocumentIdRef.current[documentId];
+      if (cached) {
+        return cached;
+      }
+
+      const pending = pendingDocumentLocationsRef.current[documentId];
+      if (pending) {
+        return pending;
+      }
+
+      const request = fetchDocumentLocations(documentId)
+        .then((items) => {
+          const validItems = items.filter((item) =>
+            isFiniteCoordinate(item.latitude, item.longitude),
+          );
+          linksByDocumentIdRef.current[documentId] = validItems;
+          return validItems;
+        })
+        .finally(() => {
+          delete pendingDocumentLocationsRef.current[documentId];
+        });
+
+      pendingDocumentLocationsRef.current[documentId] = request;
+      return request;
+    },
+    [],
+  );
+
+  const updateVisibleLinksForActiveDocument = useCallback((documentId: string | null) => {
+    if (!documentId) {
+      setVisibleDocumentLinks([]);
+      setOffscreenLinkCount(0);
+      return;
+    }
+
+    const items = linksByDocumentIdRef.current[documentId];
+    if (!items) {
+      return;
+    }
+
+    const viewport = mapViewportRef.current;
+    const visible = viewport ? items.filter((item) => isInViewport(item, viewport)) : [];
+    setVisibleDocumentLinks(visible);
+    setOffscreenLinkCount(items.length - visible.length);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,12 +220,14 @@ export default function App() {
         }
         setLocations(items.filter((item) => isFiniteCoordinate(item.latitude, item.longitude)));
         setBoundaries(nextBoundaries);
+        setErrorContext("unknown");
         setStatus("ready");
       })
       .catch(() => {
         if (cancelled) {
           return;
         }
+        setErrorContext("startup");
         setStatus("error");
       });
     return () => {
@@ -102,32 +238,73 @@ export default function App() {
   useEffect(() => {
     if (!selectedLocationId || searchActive) {
       setLocationDocuments([]);
-      setFallbackDepth(null);
+      setLocationDocumentsMeta(null);
       return;
     }
     let cancelled = false;
-    fetchLocationDocuments(selectedLocationId)
+    fetchLocationDocumentsCached(selectedLocationId)
       .then((payload: LocationDocumentsResponse) => {
         if (cancelled) {
           return;
         }
         setLocationDocuments(payload.items);
-        setFallbackDepth(payload.fallback_depth);
+        setLocationDocumentsMeta(payload);
       })
       .catch(() => {
         if (cancelled) {
           return;
         }
+        setErrorContext("location_documents");
         setStatus("error");
       });
     return () => {
       cancelled = true;
     };
-  }, [selectedLocationId, searchActive]);
+  }, [fetchLocationDocumentsCached, searchActive, selectedLocationId]);
+
+  const canLoadMoreLocationDocuments = useMemo(() => {
+    if (searchActive) {
+      return false;
+    }
+    if (!selectedLocationId || !locationDocumentsMeta) {
+      return false;
+    }
+    return locationDocuments.length < locationDocumentsMeta.total_items;
+  }, [locationDocuments.length, locationDocumentsMeta, searchActive, selectedLocationId]);
+
+  const onLoadMoreLocationDocuments = useCallback(() => {
+    if (!selectedLocationId || !locationDocumentsMeta || isLoadingMoreDocuments || searchActive) {
+      return;
+    }
+    setIsLoadingMoreDocuments(true);
+    fetchLocationDocuments(selectedLocationId, {
+      limit: LOCATION_DOCUMENTS_PAGE_SIZE,
+      offset: locationDocuments.length,
+    })
+      .then((payload) => {
+        setLocationDocuments((current) =>
+          Array.from(new Map([...current, ...payload.items].map((item) => [item.document_id, item])).values()),
+        );
+        setLocationDocumentsMeta(payload);
+      })
+      .catch(() => {
+        setErrorContext("location_documents");
+        setStatus("error");
+      })
+      .finally(() => {
+        setIsLoadingMoreDocuments(false);
+      });
+  }, [
+    isLoadingMoreDocuments,
+    locationDocuments.length,
+    locationDocumentsMeta,
+    searchActive,
+    selectedLocationId,
+  ]);
 
   useEffect(() => {
     if (!searchActive) {
-      setSearchResults({ query: "", documents: [], locations: [] });
+      setSearchResults(EMPTY_SEARCH_RESULTS);
       setSearchDocumentCoordinates([]);
       return;
     }
@@ -137,6 +314,7 @@ export default function App() {
           setSearchResults(payload);
         })
         .catch(() => {
+          setErrorContext("search");
           setStatus("error");
         });
     }, 180);
@@ -151,7 +329,6 @@ export default function App() {
       ),
     [displayedDocuments],
   );
-  const activeVisualizationDocumentId = pinnedDocumentId ?? hoveredDocumentId;
 
   useEffect(() => {
     if (!searchActive || searchResults.documents.length === 0) {
@@ -168,7 +345,7 @@ export default function App() {
       new Set(searchResults.documents.map((item) => item.document_id)),
     );
 
-    Promise.all(uniqueDocumentIds.map((documentId) => fetchDocumentLocations(documentId)))
+    Promise.all(uniqueDocumentIds.map((documentId) => fetchDocumentLocationsCached(documentId)))
       .then((allLinks) => {
         if (cancelled) {
           return;
@@ -197,39 +374,33 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [searchActive, searchResults.documents, searchResults.locations.length]);
+  }, [
+    fetchDocumentLocationsCached,
+    searchActive,
+    searchResults.documents,
+    searchResults.locations.length,
+  ]);
 
   useEffect(() => {
+    activeVisualizationDocumentIdRef.current = activeVisualizationDocumentId;
+
     if (!activeVisualizationDocumentId) {
-      setVisibleDocumentLinks([]);
-      setOffscreenLinkCount(0);
+      updateVisibleLinksForActiveDocument(null);
       return;
     }
 
-    const cached = linksByDocumentIdRef.current[activeVisualizationDocumentId];
-    if (cached) {
-      const visible = cached.filter((item) => isInViewport(item, mapViewport));
-      setVisibleDocumentLinks(visible);
-      setOffscreenLinkCount(cached.length - visible.length);
-      return;
-    }
+    updateVisibleLinksForActiveDocument(activeVisualizationDocumentId);
 
     let cancelled = false;
-    fetchDocumentLocations(activeVisualizationDocumentId)
-      .then((items) => {
-        if (cancelled) {
+    fetchDocumentLocationsCached(activeVisualizationDocumentId)
+      .then(() => {
+        if (cancelled || activeVisualizationDocumentIdRef.current !== activeVisualizationDocumentId) {
           return;
         }
-        const validItems = items.filter((item) =>
-          isFiniteCoordinate(item.latitude, item.longitude),
-        );
-        linksByDocumentIdRef.current[activeVisualizationDocumentId] = validItems;
-        const visible = validItems.filter((item) => isInViewport(item, mapViewport));
-        setVisibleDocumentLinks(visible);
-        setOffscreenLinkCount(validItems.length - visible.length);
+        updateVisibleLinksForActiveDocument(activeVisualizationDocumentId);
       })
       .catch(() => {
-        if (cancelled) {
+        if (cancelled || activeVisualizationDocumentIdRef.current !== activeVisualizationDocumentId) {
           return;
         }
         setVisibleDocumentLinks([]);
@@ -239,7 +410,20 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeVisualizationDocumentId, mapViewport]);
+  }, [
+    activeVisualizationDocumentId,
+    fetchDocumentLocationsCached,
+    updateVisibleLinksForActiveDocument,
+  ]);
+
+  useEffect(
+    () => () => {
+      if (viewportRafRef.current !== null) {
+        window.cancelAnimationFrame(viewportRafRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -256,23 +440,20 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [pdfModalDocumentId]);
 
-  const searchFocusCoordinates = useMemo(
-    () => {
-      if (!searchActive) {
-        return [];
-      }
-      if (searchResults.locations.length > 0) {
-        return searchResults.locations
-          .filter((item) => isFiniteCoordinate(item.latitude, item.longitude))
-          .map((item) => ({
-            latitude: item.latitude,
-            longitude: item.longitude,
-          }));
-      }
-      return searchDocumentCoordinates;
-    },
-    [searchActive, searchResults.locations, searchDocumentCoordinates],
-  );
+  const searchFocusCoordinates = useMemo(() => {
+    if (!searchActive) {
+      return [];
+    }
+    if (searchResults.locations.length > 0) {
+      return searchResults.locations
+        .filter((item) => isFiniteCoordinate(item.latitude, item.longitude))
+        .map((item) => ({
+          latitude: item.latitude,
+          longitude: item.longitude,
+        }));
+    }
+    return searchDocumentCoordinates;
+  }, [searchActive, searchResults.locations, searchDocumentCoordinates]);
 
   const onHoverLocation = useCallback(
     (locationId: string | null) => {
@@ -307,17 +488,53 @@ export default function App() {
     [],
   );
 
+  const onViewportChange = useCallback(
+    (viewport: MapViewport) => {
+      mapViewportRef.current = viewport;
+      if (!activeVisualizationDocumentIdRef.current) {
+        return;
+      }
+      if (viewportRafRef.current !== null) {
+        return;
+      }
+      viewportRafRef.current = window.requestAnimationFrame(() => {
+        viewportRafRef.current = null;
+        updateVisibleLinksForActiveDocument(activeVisualizationDocumentIdRef.current);
+      });
+    },
+    [updateVisibleLinksForActiveDocument],
+  );
+
   const selectedLocation = useMemo(
     () => locations.find((item) => item.location_id === selectedLocationId) ?? null,
     [locations, selectedLocationId],
   );
+
+  const activeVisualizationDocument = useMemo(
+    () => uniqueDisplayedDocuments.find((doc) => doc.document_id === activeVisualizationDocumentId) ?? null,
+    [activeVisualizationDocumentId, uniqueDisplayedDocuments],
+  );
+
+  const highlightedLocationIds = useMemo(
+    () => (searchActive ? searchResults.locations.map((location) => location.location_id) : []),
+    [searchActive, searchResults.locations],
+  );
+
+  const visibleLinksToRender = useMemo(() => {
+    if (!declutterLinks) {
+      return visibleDocumentLinks;
+    }
+    return visibleDocumentLinks.slice(0, LINK_DECLUTTER_LIMIT);
+  }, [declutterLinks, visibleDocumentLinks]);
+
+  const hiddenVisibleLinkCount = Math.max(visibleDocumentLinks.length - visibleLinksToRender.length, 0);
 
   const linkPaths = useMemo(() => {
     if (!activeVisualizationDocumentId || !projector) {
       return [];
     }
     const card = cardRefs.current[activeVisualizationDocumentId];
-    if (!card || visibleDocumentLinks.length === 0) {
+    if (!card || visibleLinksToRender.length === 0) {
       return [];
     }
 
@@ -327,12 +544,40 @@ export default function App() {
       y: cardRect.top + cardRect.height / 2,
     };
     const anchorY = source.y + 28;
+    const maxMention = Math.max(...visibleLinksToRender.map((link) => Math.max(link.mention_count, 1)), 1);
 
-    return visibleDocumentLinks.map((link) => {
+    return visibleLinksToRender.map((link) => {
       const target = projector(link.longitude, link.latitude);
-      return buildUmbrellaPath(source, anchorY, target);
+      const emphasis = Math.max(link.mention_count, 1) / maxMention;
+      return {
+        d: buildUmbrellaPath(source, anchorY, target),
+        opacity: 0.35 + emphasis * 0.5,
+        width: 1.2 + emphasis * 1.8,
+      };
     });
-  }, [activeVisualizationDocumentId, projector, visibleDocumentLinks]);
+  }, [activeVisualizationDocumentId, projector, visibleLinksToRender]);
+
+  const activeMode: ActiveMode = useMemo(() => {
+    if (pdfModalDocumentId) {
+      return "PDF Modal";
+    }
+    if (pinnedDocumentId) {
+      return "Pinned Document";
+    }
+    if (hoveredDocumentId) {
+      return "Document Hover";
+    }
+    if (searchActive) {
+      return "Search";
+    }
+    if (pinnedLocationId) {
+      return "Pinned Location";
+    }
+    if (hoveredLocationId) {
+      return "Hover Location";
+    }
+    return "Idle";
+  }, [hoveredDocumentId, hoveredLocationId, pdfModalDocumentId, pinnedDocumentId, pinnedLocationId, searchActive]);
 
   const panelTitle = searchActive
     ? `Search: ${searchResults.query || searchQuery.trim()}`
@@ -343,8 +588,13 @@ export default function App() {
   return (
     <div className="layout-root">
       <svg className="umbrella-overlay" aria-hidden="true">
-        {linkPaths.map((path, index) => (
-          <path key={`${index}-${path}`} d={path} className="umbrella-line" />
+        {linkPaths.map((item, index) => (
+          <path
+            key={`${index}-${item.d}`}
+            d={item.d}
+            className="umbrella-line"
+            style={{ opacity: item.opacity, strokeWidth: item.width }}
+          />
         ))}
       </svg>
 
@@ -367,7 +617,16 @@ export default function App() {
                 Clear
               </button>
             </>
-          ) : null}
+          ) : (
+            <div className="left-panel-collapsed-actions">
+              <button type="button" title="Focus search" onClick={() => searchInputRef.current?.focus()}>
+                S
+              </button>
+              <button type="button" title="Clear selections" onClick={onClear}>
+                C
+              </button>
+            </div>
+          )}
         </aside>
 
         <main className="map-panel">
@@ -375,18 +634,27 @@ export default function App() {
             locations={locations}
             boundaries={boundaries}
             selectedLocationId={selectedLocationId}
+            highlightedLocationIds={highlightedLocationIds}
             onHoverLocation={onHoverLocation}
             onClickLocation={onClickLocation}
             onEmptyMapClick={onEmptyMapClick}
-            onViewportChange={setMapViewport}
+            onViewportChange={onViewportChange}
             onProjectorChange={onProjectorChange}
             focusCoordinates={searchFocusCoordinates}
           />
+
+          <div className="map-legend" aria-label="Map legend">
+            <h3>Legend</h3>
+            <div className="legend-row"><span className="legend-dot city" /> City point</div>
+            <div className="legend-row"><span className="legend-dot fallback" /> Missing boundary fallback</div>
+            <div className="legend-row"><span className="legend-polygon" /> Region/Country/Continent/Ocean polygon</div>
+          </div>
         </main>
 
         <aside className="right-panel">
           <div className="search-row">
             <input
+              ref={searchInputRef}
               type="search"
               value={searchQuery}
               placeholder="Search SCP or location"
@@ -394,12 +662,33 @@ export default function App() {
             />
           </div>
 
-          <h2>{panelTitle}</h2>
-          {fallbackDepth !== null && fallbackDepth > 0 && !searchActive ? (
-            <p className="fallback-note">Fallback depth: {fallbackDepth}</p>
+          <div className="mode-summary-row">
+            <span className="mode-pill">Mode: {activeMode}</span>
+            {selectedLocation ? (
+              <span className="selection-pill" title={selectedLocation.name}>
+                {selectedLocation.name} · {selectedLocation.document_count} docs
+              </span>
+            ) : null}
+          </div>
+
+          {searchActive && status === "ready" ? (
+            <p className="search-summary">
+              Results: {searchResults.locations.length} locations, {searchResults.documents.length} documents
+            </p>
           ) : null}
-          {status === "loading" && <p>Loading...</p>}
-          {status === "error" && <p>Unable to load data.</p>}
+
+          <h2>{panelTitle}</h2>
+          {locationDocumentsMeta && !searchActive ? (
+            <p className="fallback-note">
+              Scope: {formatRank(locationDocumentsMeta.scope_rank)} · {locationDocumentsMeta.total_items} docs from{" "}
+              {locationDocumentsMeta.scope_location_count} locations
+              {locationDocumentsMeta.fallback_depth && locationDocumentsMeta.fallback_depth > 0
+                ? ` · alias depth ${locationDocumentsMeta.fallback_depth}`
+                : ""}
+            </p>
+          ) : null}
+          {status === "loading" && <p>Loading locations and boundaries...</p>}
+          {status === "error" && <p>{errorMessageFor(errorContext)}</p>}
 
           {status === "ready" && searchActive ? (
             <div className="search-result-locations">
@@ -410,7 +699,8 @@ export default function App() {
                   className="search-location-chip"
                   onClick={() => onClickLocation(location.location_id)}
                 >
-                  {location.name}
+                  <span className="chip-rank">{formatRank(location.location_rank)}</span>
+                  <span>{location.name}</span>
                 </button>
               ))}
             </div>
@@ -418,6 +708,20 @@ export default function App() {
 
           {status === "ready" && !searchActive && !selectedLocation && <p>Explore the map to discover SCP documents.</p>}
           {status === "ready" && uniqueDisplayedDocuments.length === 0 && (searchActive || selectedLocation) ? <p>No linked documents.</p> : null}
+
+          {activeVisualizationDocumentId ? (
+            <div className="link-controls">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={declutterLinks}
+                  onChange={(event) => setDeclutterLinks(event.target.checked)}
+                />
+                Declutter links (top {LINK_DECLUTTER_LIMIT})
+              </label>
+              {hiddenVisibleLinkCount > 0 ? <span>Hidden visible links: {hiddenVisibleLinkCount}</span> : null}
+            </div>
+          ) : null}
 
           <div className="cards">
             {uniqueDisplayedDocuments.map((doc) => (
@@ -446,6 +750,12 @@ export default function App() {
                   </a>
                 </header>
                 <p className="card-location">{doc.location_display ?? "Unknown location"}</p>
+                <div className="card-meta-row">
+                  <span className="card-meta-pill">PDF: {doc.pdf_url ? "Available" : "Missing"}</span>
+                  {activeVisualizationDocument?.document_id === doc.document_id ? (
+                    <span className="card-meta-pill emphasis">Active visualization</span>
+                  ) : null}
+                </div>
 
                 <PdfThumbnail
                   pdfUrl={doc.pdf_url}
@@ -457,11 +767,18 @@ export default function App() {
                 />
 
                 {activeVisualizationDocumentId === doc.document_id ? (
-                  <p className="offscreen-count">Offscreen linked locations: {offscreenLinkCount}</p>
+                  <p className="offscreen-count badge">Offscreen linked locations: {offscreenLinkCount}</p>
                 ) : null}
               </article>
             ))}
           </div>
+          {canLoadMoreLocationDocuments ? (
+            <div className="load-more-row">
+              <button type="button" onClick={onLoadMoreLocationDocuments} disabled={isLoadingMoreDocuments}>
+                {isLoadingMoreDocuments ? "Loading..." : "Load more"}
+              </button>
+            </div>
+          ) : null}
         </aside>
       </div>
 

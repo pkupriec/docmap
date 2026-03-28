@@ -176,8 +176,91 @@ def _apply_runtime_schema_patches() -> None:
             )
             cur.execute(
                 """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS canonical_id TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS canonical_resolution_method TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS canonical_confidence SMALLINT
+                """
+            )
+            cur.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_geo_locations_osm_identity
                 ON geo_locations(osm_type, osm_id)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_geo_locations_canonical_id
+                ON geo_locations(canonical_id)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS geo_canonical_places (
+                    canonical_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    place_type TEXT NOT NULL,
+                    canonical_name TEXT NOT NULL,
+                    parent_canonical_id TEXT REFERENCES geo_canonical_places(canonical_id),
+                    country_canonical_id TEXT REFERENCES geo_canonical_places(canonical_id),
+                    centroid_lat DOUBLE PRECISION,
+                    centroid_lon DOUBLE PRECISION,
+                    valid_from TIMESTAMP,
+                    valid_to TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_geo_canonical_places_source_source_id
+                ON geo_canonical_places(source, source_id)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS geo_canonical_aliases (
+                    canonical_id TEXT NOT NULL REFERENCES geo_canonical_places(canonical_id) ON DELETE CASCADE,
+                    alias TEXT NOT NULL,
+                    normalized_alias TEXT NOT NULL,
+                    alias_type TEXT NOT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+                    PRIMARY KEY (canonical_id, normalized_alias, alias_type)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_geo_canonical_aliases_normalized_alias_type
+                ON geo_canonical_aliases(normalized_alias, alias_type)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS geo_canonical_concordances (
+                    canonical_id TEXT NOT NULL REFERENCES geo_canonical_places(canonical_id) ON DELETE CASCADE,
+                    external_source TEXT NOT NULL,
+                    external_id TEXT NOT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+                    PRIMARY KEY (external_source, external_id)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_geo_canonical_concordances_canonical
+                ON geo_canonical_concordances(canonical_id)
                 """
             )
             cur.execute(
@@ -195,6 +278,18 @@ def _apply_runtime_schema_patches() -> None:
                 """
                 CREATE INDEX IF NOT EXISTS idx_bi_location_hierarchy_descendant_depth
                 ON bi_location_hierarchy(descendant_location_id, depth)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bi_location_hierarchy_ancestor_depth
+                ON bi_location_hierarchy(ancestor_location_id, depth)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bi_document_locations_location_document
+                ON bi_document_locations(location_id, document_id)
                 """
             )
             cur.execute(

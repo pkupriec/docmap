@@ -1,5 +1,7 @@
 # Architecture
 
+Coding agents should read `ARCHITECTURE.summary.md` first and open this file when the task needs the full runtime model.
+
 ## System Context
 
 DocMap is a batch-oriented pipeline with an integrated operator control plane.

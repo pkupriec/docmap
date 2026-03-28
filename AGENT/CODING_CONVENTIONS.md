@@ -1,5 +1,7 @@
 # Coding Conventions
 
+Reference note: this file is a secondary coding-style reference. Start with `AGENT/INDEX.md` for the default preload.
+
 This document defines coding standards for the DocMap project.
 
 The AI agent must follow these rules when writing code.

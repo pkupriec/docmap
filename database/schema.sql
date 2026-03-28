@@ -106,6 +106,9 @@ CREATE TABLE geo_locations (
     osm_addresstype TEXT,
     osm_place_rank INTEGER,
     osm_boundingbox JSONB,
+    canonical_id TEXT,
+    canonical_resolution_method TEXT,
+    canonical_confidence SMALLINT,
     geom GEOGRAPHY(Point, 4326)
 );
 
@@ -114,6 +117,54 @@ ON geo_locations USING GIST(geom);
 
 CREATE INDEX idx_geo_locations_osm_identity
 ON geo_locations(osm_type, osm_id);
+
+CREATE INDEX idx_geo_locations_canonical_id
+ON geo_locations(canonical_id);
+
+-- =====================================================
+-- CANONICAL GEO DICTIONARY
+-- =====================================================
+
+CREATE TABLE geo_canonical_places (
+    canonical_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    place_type TEXT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    parent_canonical_id TEXT REFERENCES geo_canonical_places(canonical_id),
+    country_canonical_id TEXT REFERENCES geo_canonical_places(canonical_id),
+    centroid_lat DOUBLE PRECISION,
+    centroid_lon DOUBLE PRECISION,
+    valid_from TIMESTAMP,
+    valid_to TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX uq_geo_canonical_places_source_source_id
+ON geo_canonical_places(source, source_id);
+
+CREATE TABLE geo_canonical_aliases (
+    canonical_id TEXT NOT NULL REFERENCES geo_canonical_places(canonical_id) ON DELETE CASCADE,
+    alias TEXT NOT NULL,
+    normalized_alias TEXT NOT NULL,
+    alias_type TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (canonical_id, normalized_alias, alias_type)
+);
+
+CREATE INDEX idx_geo_canonical_aliases_normalized_alias_type
+ON geo_canonical_aliases(normalized_alias, alias_type);
+
+CREATE TABLE geo_canonical_concordances (
+    canonical_id TEXT NOT NULL REFERENCES geo_canonical_places(canonical_id) ON DELETE CASCADE,
+    external_source TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (external_source, external_id)
+);
+
+CREATE INDEX idx_geo_canonical_concordances_canonical
+ON geo_canonical_concordances(canonical_id);
 
 -- =====================================================
 -- DOCUMENT LOCATIONS
@@ -180,6 +231,9 @@ CREATE TABLE bi_document_locations (
 CREATE INDEX idx_bi_document_locations_location
 ON bi_document_locations(location_id);
 
+CREATE INDEX idx_bi_document_locations_location_document
+ON bi_document_locations(location_id, document_id);
+
 CREATE TABLE bi_location_hierarchy (
     ancestor_location_id UUID NOT NULL REFERENCES geo_locations(id),
     descendant_location_id UUID NOT NULL REFERENCES geo_locations(id),
@@ -190,6 +244,9 @@ CREATE TABLE bi_location_hierarchy (
 
 CREATE INDEX idx_bi_location_hierarchy_descendant_depth
 ON bi_location_hierarchy(descendant_location_id, depth);
+
+CREATE INDEX idx_bi_location_hierarchy_ancestor_depth
+ON bi_location_hierarchy(ancestor_location_id, depth);
 
 CREATE TABLE bi_admin_boundaries (
     location_id UUID PRIMARY KEY REFERENCES geo_locations(id),

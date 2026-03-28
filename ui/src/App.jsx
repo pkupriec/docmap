@@ -316,8 +316,11 @@ function StartRunModal({ onClose, onSubmit, mode = "default" }) {
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
   const [refreshGeoIdentity, setRefreshGeoIdentity] = useState(false);
+  const [refreshCanonicalDictionary, setRefreshCanonicalDictionary] = useState(false);
   const unprocessedMode = mode === "unprocessed";
   const supportsRefreshGeoIdentity =
+    !unprocessedMode && (pipeline_type === "full_pipeline" || pipeline_type === "geocode_only");
+  const supportsCanonicalRefresh =
     !unprocessedMode && (pipeline_type === "full_pipeline" || pipeline_type === "geocode_only");
 
   const submit = () => {
@@ -325,6 +328,9 @@ function StartRunModal({ onClose, onSubmit, mode = "default" }) {
     if (unprocessedMode) payload.options.process_unprocessed_only = true;
     if (supportsRefreshGeoIdentity && refreshGeoIdentity) {
       payload.options.refresh_geo_identity = true;
+    }
+    if (supportsCanonicalRefresh) {
+      payload.options.refresh_canonical_dictionary = refreshCanonicalDictionary;
     }
     if (target_scope === "single_document" && document_url) payload.document_url = document_url;
     if (target_scope === "document_range" && rangeStart && rangeEnd) {
@@ -373,6 +379,16 @@ function StartRunModal({ onClose, onSubmit, mode = "default" }) {
               onChange={(e) => setRefreshGeoIdentity(e.target.checked)}
             />
             Refresh missing geo identity (re-geocode cache rows without rank/OSM identity/bbox)
+          </label>
+        ) : null}
+        {supportsCanonicalRefresh ? (
+          <label>
+            <input
+              type="checkbox"
+              checked={refreshCanonicalDictionary}
+              onChange={(e) => setRefreshCanonicalDictionary(e.target.checked)}
+            />
+            Reload canonical dictionary before geocoding (from CANONICAL_DICTIONARY_INPUT)
           </label>
         ) : null}
         <div className="actions">

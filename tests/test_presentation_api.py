@@ -10,7 +10,10 @@ from services.presentation.backend.repository import ResolvedLocation
 
 
 class PresentationRepo:
-    def get_admin_boundaries_geojson(self):
+    last_boundaries_minimal: bool | None = None
+
+    def get_admin_boundaries_geojson(self, *, minimal: bool = False):
+        PresentationRepo.last_boundaries_minimal = minimal
         return {
             "type": "FeatureCollection",
             "features": [
@@ -44,28 +47,38 @@ class PresentationRepo:
         ]
 
     def resolve_location_for_documents(self, location_id):
-        return ResolvedLocation(location_id=str(location_id), depth=0)
+        return ResolvedLocation(location_id=str(location_id), depth=0, location_rank="city")
 
     def get_location_name(self, location_id):
         return "Paris, France"
 
-    def list_location_documents(self, location_id):
-        return [
-            {
-                "document_id": UUID("00000000-0000-0000-0000-000000000101"),
-                "scp_number": "SCP-101",
-                "canonical_scp_id": "scp-101",
-                "scp_url": "https://scp-wiki.wikidot.com/scp-101",
-                "pdf_url": "/api/map/document/00000000-0000-0000-0000-000000000101/pdf",
-            },
-            {
-                "document_id": UUID("00000000-0000-0000-0000-000000000101"),
-                "scp_number": "SCP-101",
-                "canonical_scp_id": "scp-101",
-                "scp_url": "https://scp-wiki.wikidot.com/scp-101",
-                "pdf_url": "/api/map/document/00000000-0000-0000-0000-000000000101/pdf",
-            },
-        ]
+    def list_location_documents(self, location_id, *, scope_rank: str, limit: int, offset: int):
+        assert scope_rank == "city"
+        assert limit >= 1
+        assert offset >= 0
+        from services.presentation.backend.repository import ScopedLocationDocuments
+
+        return ScopedLocationDocuments(
+            scope_rank="city",
+            location_count=1,
+            total_items=1,
+            items=[
+                {
+                    "document_id": UUID("00000000-0000-0000-0000-000000000101"),
+                    "scp_number": "SCP-101",
+                    "canonical_scp_id": "scp-101",
+                    "scp_url": "https://scp-wiki.wikidot.com/scp-101",
+                    "pdf_url": "/api/map/document/00000000-0000-0000-0000-000000000101/pdf",
+                },
+                {
+                    "document_id": UUID("00000000-0000-0000-0000-000000000101"),
+                    "scp_number": "SCP-101",
+                    "canonical_scp_id": "scp-101",
+                    "scp_url": "https://scp-wiki.wikidot.com/scp-101",
+                    "pdf_url": "/api/map/document/00000000-0000-0000-0000-000000000101/pdf",
+                },
+            ],
+        )
 
     def get_document_card(self, document_id):
         return {
@@ -171,6 +184,7 @@ def test_locations_endpoint(monkeypatch) -> None:
 
 def test_boundaries_endpoint(monkeypatch) -> None:
     client = _client(monkeypatch)
+    PresentationRepo.last_boundaries_minimal = None
 
     response = client.get("/api/map/boundaries")
 
@@ -179,6 +193,17 @@ def test_boundaries_endpoint(monkeypatch) -> None:
     assert payload["type"] == "FeatureCollection"
     assert len(payload["features"]) == 1
     assert payload["features"][0]["properties"]["location_rank"] == "country"
+    assert PresentationRepo.last_boundaries_minimal is False
+
+
+def test_boundaries_lite_endpoint(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    PresentationRepo.last_boundaries_minimal = None
+
+    response = client.get("/api/map/boundaries?lite=1")
+
+    assert response.status_code == 200
+    assert PresentationRepo.last_boundaries_minimal is True
 
 
 def test_location_documents_endpoint(monkeypatch) -> None:
@@ -189,6 +214,10 @@ def test_location_documents_endpoint(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["fallback_depth"] == 0
+    assert payload["scope_rank"] == "city"
+    assert payload["scope_location_count"] == 1
+    assert payload["total_items"] == 1
+    assert payload["returned_items"] == 1
     assert len(payload["items"]) == 1
     assert payload["items"][0]["scp_number"] == "SCP-101"
     assert payload["items"][0]["location_display"] == "Paris, France"
@@ -212,6 +241,21 @@ def test_document_pdf_endpoint(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/pdf")
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-length"] == str(len(b"%PDF-1.7\n"))
+
+
+def test_document_pdf_range_endpoint(monkeypatch) -> None:
+    client = _client(monkeypatch)
+
+    response = client.get(
+        "/api/map/document/00000000-0000-0000-0000-000000000101/pdf",
+        headers={"Range": "bytes=0-3"},
+    )
+
+    assert response.status_code == 206
+    assert response.content == b"%PDF"
+    assert response.headers["content-range"] == "bytes 0-3/9"
 
 
 def test_document_locations_endpoint(monkeypatch) -> None:

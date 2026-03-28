@@ -370,7 +370,17 @@ def test_geocode_full_mode_uses_all_mentions(monkeypatch: pytest.MonkeyPatch) ->
     repo = _StageRepo()
     orchestrator = ControlOrchestrator(repository=repo)
     captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_connection",
+        lambda: __import__("contextlib").nullcontext(object()),
+    )
 
+    monkeypatch.setattr(
+        orchestrator_module,
+        "refresh_canonical_dictionary",
+        lambda **kwargs: {"executed": False, "reason": "test"},
+    )
     monkeypatch.setattr(orchestrator_module, "count_all_mentions", lambda _conn: 10)
     monkeypatch.setattr(orchestrator_module, "count_pending_mentions", lambda _conn: 3)
     monkeypatch.setattr(orchestrator_module, "normalize_pending_mentions", lambda **kwargs: 0)
@@ -401,7 +411,17 @@ def test_geocode_full_mode_passes_refresh_geo_identity(monkeypatch: pytest.Monke
     repo = _StageRepo()
     orchestrator = ControlOrchestrator(repository=repo)
     captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_connection",
+        lambda: __import__("contextlib").nullcontext(object()),
+    )
 
+    monkeypatch.setattr(
+        orchestrator_module,
+        "refresh_canonical_dictionary",
+        lambda **kwargs: {"executed": True, "counts": {"places": 0, "aliases": 0, "concordances": 0}, "diagnostics": {}},
+    )
     monkeypatch.setattr(orchestrator_module, "count_all_mentions", lambda _conn: 10)
     monkeypatch.setattr(orchestrator_module, "count_pending_mentions", lambda _conn: 3)
     monkeypatch.setattr(orchestrator_module, "normalize_pending_mentions", lambda **kwargs: 0)
@@ -424,7 +444,17 @@ def test_geocode_unprocessed_mode_uses_pending_mentions(monkeypatch: pytest.Monk
     repo = _StageRepo()
     orchestrator = ControlOrchestrator(repository=repo)
     captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_connection",
+        lambda: __import__("contextlib").nullcontext(object()),
+    )
 
+    monkeypatch.setattr(
+        orchestrator_module,
+        "refresh_canonical_dictionary",
+        lambda **kwargs: {"executed": False, "reason": "test"},
+    )
     monkeypatch.setattr(orchestrator_module, "count_pending_mentions", lambda _conn: 4)
     monkeypatch.setattr(orchestrator_module, "count_all_mentions", lambda _conn: 11)
     monkeypatch.setattr(orchestrator_module, "normalize_pending_mentions", lambda **kwargs: 0)

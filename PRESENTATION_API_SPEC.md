@@ -1,23 +1,56 @@
 # Presentation API Spec
 
+Coding agents should read `PRESENTATION.summary.md` first and open this file when the task needs the detailed API contract.
+
 ## Scope
 
-Read-only API for presentation map UI.
+Read-only API for the presentation map UI.
 
 Base paths:
 
 - map endpoints: `/api/map/*`
+- search: `/api/search`
 - health: `/healthz`
 
 ## GET `/api/map/locations`
 
-Returns all locations from `bi_locations` with deterministic ordering.
+Returns all valid coordinate-bearing locations from `bi_locations` with deterministic ordering.
 
 Response: `Location[]`
 
-Phase 13 contract addition:
+Returned fields currently include:
 
-- each location payload should include `location_rank`
+- `location_id`
+- `name`
+- `latitude`
+- `longitude`
+- `precision`
+- `location_rank`
+- `document_count`
+- `parent_location_id`
+
+## GET `/api/map/boundaries`
+
+Returns presentation boundary geometry as a GeoJSON `FeatureCollection`.
+
+Runtime source:
+
+- `bi_admin_boundaries.feature_json`
+
+Current response characteristics:
+
+- all rows are assembled into one `FeatureCollection`
+- response ordering is deterministic by rank bucket, then `location_id`
+- only `Polygon` and `MultiPolygon` features are usable by the current frontend
+
+Current feature properties may include:
+
+- `location_id`
+- `location_name`
+- `location_rank`
+- `country_name`
+- `region_name`
+- `match_strategy`
 
 ## GET `/api/map/location/{location_id}/documents`
 
@@ -38,15 +71,46 @@ Response:
 }
 ```
 
-Fallback:
+Fallback behavior:
 
 - direct location first
-- if empty: nearest ancestor depth with documents (`city -> region -> country`)
+- if empty: nearest ancestor depth in `bi_location_hierarchy` that has linked documents
+- if nothing resolves: `resolved_location_id = null`, `fallback_depth = null`, `items = []`
 
-Phase 13 note:
+Important note:
 
-- fallback remains unchanged
-- `continent` and `ocean` are not fallback targets
+- current implementation does not enforce a strict fallback rank allowlist in SQL
+- current data shape makes results behave like `city -> admin_region/country` in practice
+
+## GET `/api/map/document/{document_id}`
+
+Returns a single document card payload suitable for:
+
+- right-panel rendering
+- modal coordination
+- search result cards
+
+Response fields:
+
+- `document_id`
+- `scp_number`
+- `canonical_scp_id`
+- `scp_url`
+- `location_display`
+- `pdf_url`
+
+## GET `/api/map/document/{document_id}/pdf`
+
+Returns PDF bytes for a document when a latest snapshot with `pdf_blob` exists.
+
+Current source path:
+
+- `bi_documents.latest_snapshot_id -> document_snapshots.pdf_blob`
+
+Response:
+
+- `application/pdf` on success
+- `404 {"error":"not_found"}` when no PDF payload exists
 
 ## GET `/api/map/document/{document_id}/locations`
 
@@ -58,6 +122,12 @@ Path parameter:
 
 Response: `DocumentLocationLink[]`
 
+Current ordering:
+
+- `mention_count DESC`
+- `name ASC`
+- `location_id ASC`
+
 ## GET `/api/map/overlays/density`
 
 Returns density points from `bi_locations`.
@@ -68,78 +138,65 @@ Response: `DensityPoint[]`
 
 Performs deterministic presentation search for:
 
-- SCP canonical numbers
-- numeric SCP queries
-- location display fields
+- canonical SCP numbers
+- numeric-only SCP queries
+- document top-location display text
+- location display fields from `bi_locations`
 
 Query parameters:
 
-- `q`: string, required
+- `q`: string, required, API validates minimum length `1`
 - `limit`: integer, optional, default `5`, maximum `5`
 
-Activation rule:
+Activation and short-query behavior:
 
-- frontend triggers this endpoint only after input length >= 3
+- the frontend only calls this endpoint after `3+` trimmed characters
+- repository search returns empty `documents` and `locations` arrays for trimmed queries shorter than `3`
 
-Ordering rules:
+Current response shape:
 
-- document results must be deterministic
-- exact canonical SCP matches rank above numeric-only matches
-- numeric-only SCP matches rank above location-name contains matches
-- location results must be deterministically ordered by relevance, then stable secondary keys
+```json
+{
+  "query": "paris",
+  "documents": [],
+  "locations": []
+}
+```
+
+Current limits:
+
+- backend caps documents to at most `5`
+- backend caps locations to at most `5`
+
+Ordering rules currently implemented:
+
+- document results are bucketed by canonical-number exact/prefix/contains and then location-display matches
+- numeric-only canonical matches outrank broader text matches
+- location results are bucketed by exact and contains matches across normalized location, city, region, and country fields
+- ties are resolved deterministically
 
 Deduplication rules:
 
-- duplicate documents must not appear multiple times
-- duplicate locations must not appear multiple times
-- nested location matches must remain distinct entities, but map-fit logic must deduplicate coordinates when computing viewport fit
+- duplicate documents are removed by `document_id`
+- duplicate locations are removed by `location_id`
 
 ## Search Result Viewport Behavior
 
 Viewport fitting is a frontend behavior driven by search response content.
 
-Rules:
+Current rules:
 
-- if exactly one location is returned, the map centers on that location
-- if multiple locations are returned, the map fits the bounding box of unique result coordinates
-- if documents are returned without explicit location matches, the frontend may resolve associated locations through existing document/location endpoints
+- if search returns one or more location results, the frontend fits/centers using those locations only
+- if search returns no location results but does return documents, the frontend fetches `/api/map/document/{id}/locations` for the matched documents and computes focus coordinates from the linked locations
+- coordinates are deduplicated before focus/fit decisions
+- a single coordinate recenters the map
+- multiple coordinates fit a bounding box
 
-## GET `/api/map/document/{document_id}`
+## API Read-Only Guarantee
 
-Returns a single document card payload suitable for:
+The presentation API is read-only.
 
-- right-panel rendering
-- modal coordination
-- future deep-link support
+Current implementation detail:
 
-Response shape must align with `PRESENTATION_DATA_CONTRACT.md`.
-
-At minimum, the endpoint must return:
-
-- `document_id`
-- `scp_number`
-- `canonical_scp_id`
-- `scp_url`
-- `location_display`
-- `pdf_url`
-
-## Static Geometry Assets
-
-Mixed geometry uses static geometry assets.
-
-These assets are not API-mutated resources.
-
-Rules:
-
-- countries and regions may be loaded from static GeoJSON or equivalent static frontend-served assets
-- phase 13 extends this to `continent` and `ocean`
-- the presentation API remains read-only
-- the geometry asset set must be deterministic for a given build/runtime state
-- geometry asset generation must be handled upstream by analytics
-- presentation runtime loads generated assets but does not generate or refresh them on startup
-- geometry assets should be keyed by stable identity such as `location_id`
-
-Phase 13 note:
-
-- hierarchy fallback remains `city -> region -> country`
-- `continent` and `ocean` are rendering ranks only and are not fallback targets
+- geometry is served by the API from DB-backed boundary rows
+- the API does not mutate or regenerate geometry at request time

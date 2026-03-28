@@ -99,23 +99,30 @@ def _build_country_features(raw_features: list[dict[str, Any]]) -> tuple[list[di
         )
         if not country_name:
             continue
-        country_aliases = _dedupe_preserve(
+        # Safe aliases are names for the same entity.
+        # Sovereignty/administrative umbrella names are intentionally excluded from primary match aliases.
+        safe_aliases = _dedupe_preserve(
             [country_name]
             + _string_values(props, prefix="name_")
             + _string_values(props, prefix="NAME_")
-            + [str(props.get("ADMIN", "")), str(props.get("SOVEREIGNT", "")), str(props.get("FORMAL_EN", ""))]
+            + [str(props.get("NAME_LONG", "")), str(props.get("FORMAL_EN", ""))]
         )
+        unsafe_aliases = _dedupe_preserve([str(props.get("ADMIN", "")), str(props.get("SOVEREIGNT", ""))])
         adm0_a3 = _first_nonempty(props, ["ADM0_A3", "ISO_A3", "SOV_A3", "GU_A3"])
         if adm0_a3:
-            aliases_by_adm0[adm0_a3] = country_aliases
+            aliases_by_adm0[adm0_a3] = safe_aliases
+        canonical_source_id = adm0_a3 or _first_nonempty(props, ["ISO_A2", "SU_A3"]) or country_name
         features.append(
             {
                 "type": "Feature",
                 "properties": {
+                    "canonical_id": f"ne:country:{canonical_source_id}",
                     "location_rank": "country",
                     "location_name": country_name,
                     "country_name": country_name,
-                    "aliases": country_aliases,
+                    "aliases": safe_aliases,
+                    "safe_aliases": safe_aliases,
+                    "unsafe_aliases": unsafe_aliases,
                 },
                 "geometry": geometry,
             }
@@ -149,16 +156,19 @@ def _build_region_features(
         adm0_a3 = _first_nonempty(props, ["adm0_a3"])
         if adm0_a3 and adm0_a3 in country_aliases_by_adm0:
             country_aliases = _dedupe_preserve(country_aliases + country_aliases_by_adm0[adm0_a3])
+        adm1_code = _first_nonempty(props, ["adm1_code", "adm1_cod_1", "woe_id", "gn_id"]) or region_name
 
         features.append(
             {
                 "type": "Feature",
                 "properties": {
+                    "canonical_id": f"ne:admin_region:{adm1_code}",
                     "location_rank": "admin_region",
                     "location_name": region_name,
                     "region_name": region_name,
                     "country_name": country_name,
                     "aliases": region_aliases,
+                    "safe_aliases": region_aliases,
                     "region_aliases": region_aliases,
                     "country_aliases": country_aliases,
                 },
@@ -189,9 +199,11 @@ def _build_ocean_features(raw_features: list[dict[str, Any]]) -> list[dict[str, 
             {
                 "type": "Feature",
                 "properties": {
+                    "canonical_id": f"ne:ocean:{ocean_name.lower()}",
                     "location_rank": "ocean",
                     "location_name": ocean_name,
                     "aliases": aliases,
+                    "safe_aliases": aliases,
                 },
                 "geometry": geometry,
             }
@@ -225,9 +237,11 @@ def _build_continent_features(raw_features: list[dict[str, Any]]) -> list[dict[s
             {
                 "type": "Feature",
                 "properties": {
+                    "canonical_id": f"ne:continent:{continent_name.lower()}",
                     "location_rank": "continent",
                     "location_name": continent_name,
                     "aliases": aliases,
+                    "safe_aliases": aliases,
                 },
                 "geometry": geometry,
             }

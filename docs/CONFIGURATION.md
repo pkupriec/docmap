@@ -44,13 +44,8 @@ This document describes runtime configuration for the current implementation.
 - `DB_STARTUP_MAX_WAIT_SECONDS` (`implemented`, optional)
 - `DB_STARTUP_RETRY_INTERVAL_SECONDS` (`implemented`, optional)
 
-### Stage processing limit
-
-- `DOCMAP_STAGE_ITEM_LIMIT` (`implemented`)
-  - unset in code -> `20`
-  - empty / `all` / `0` -> unlimited
-  - positive integer -> explicit limit
-- current compose value: `8000` (`implemented` local default)
+Note:
+- global stage item limit env is removed; stage throughput is governed by run mode and per-stage options
 
 ### BigQuery export
 

@@ -37,10 +37,12 @@ NON_ALNUM_RE = re.compile(r"[^a-z0-9\s]+")
 @dataclass(frozen=True)
 class GeometryTarget:
     location_id: str
+    canonical_id: str | None
     location_name: str
     location_rank: str
     country_name: str | None
     region_name: str | None
+    document_count: int
     osm_type: str | None
     osm_id: int | None
 
@@ -195,10 +197,12 @@ def _query_targets(conn: Connection) -> list[GeometryTarget]:
                 bl.country,
                 bl.region,
                 bl.city,
+                bl.document_count,
                 bl.precision,
                 bl.location_rank,
                 gl.osm_type,
-                gl.osm_id
+                gl.osm_id,
+                gl.canonical_id
             FROM bi_locations bl
             LEFT JOIN geo_locations gl ON gl.id = bl.location_id
             ORDER BY bl.location_id ASC
@@ -209,26 +213,79 @@ def _query_targets(conn: Connection) -> list[GeometryTarget]:
     targets: list[GeometryTarget] = []
     for row in rows:
         location_rank = _infer_rank_from_row(
-            location_rank=_coerce_text(row[6]),
-            precision=_coerce_text(row[5]),
+            location_rank=_coerce_text(row[7]),
+            precision=_coerce_text(row[6]),
             city=_coerce_text(row[4]),
             region=_coerce_text(row[3]),
             country=_coerce_text(row[2]),
         )
         if location_rank not in POLYGON_RANKS:
             continue
+        document_count_raw = row[5]
+        if isinstance(document_count_raw, int):
+            document_count = document_count_raw
+        else:
+            document_count = int(document_count_raw or 0)
         targets.append(
             GeometryTarget(
                 location_id=str(row[0]),
+                canonical_id=_coerce_text(row[10]),
                 location_name=str(row[1]),
                 location_rank=location_rank,
                 country_name=_coerce_text(row[2]),
                 region_name=_coerce_text(row[3]),
-                osm_type=_coerce_text(row[7]),
-                osm_id=_coerce_int(row[8]),
+                document_count=document_count,
+                osm_type=_coerce_text(row[8]),
+                osm_id=_coerce_int(row[9]),
             )
         )
-    return targets
+    return _dedupe_alias_targets(targets)
+
+
+def _target_alias_key(target: GeometryTarget) -> tuple[str, str, str] | None:
+    if target.location_rank == "country":
+        country_key = _normalize(target.country_name)
+        if country_key:
+            return ("country", country_key, "")
+    if target.location_rank == "admin_region":
+        country_key = _normalize(target.country_name)
+        region_key = _normalize(target.region_name or target.location_name)
+        if country_key and region_key:
+            return ("admin_region", country_key, region_key)
+    return None
+
+
+def _target_priority(target: GeometryTarget) -> tuple[int, int, str]:
+    has_osm_identity = int(_osm_key(target.osm_type, target.osm_id) is not None)
+    return (has_osm_identity, int(target.document_count), target.location_id)
+
+
+def _dedupe_alias_targets(targets: list[GeometryTarget]) -> list[GeometryTarget]:
+    grouped: dict[tuple[str, str, str], list[GeometryTarget]] = {}
+    passthrough: list[GeometryTarget] = []
+    for target in targets:
+        key = _target_alias_key(target)
+        if key is None:
+            passthrough.append(target)
+            continue
+        grouped.setdefault(key, []).append(target)
+
+    deduped = list(passthrough)
+    for key, group in grouped.items():
+        if len(group) == 1:
+            deduped.append(group[0])
+            continue
+        winner = max(group, key=_target_priority)
+        dropped = sorted(item.location_id for item in group if item.location_id != winner.location_id)
+        logger.warning(
+            "analytics.admin_boundaries_target_alias_collision key=%s kept=%s dropped=%s",
+            key,
+            winner.location_id,
+            dropped,
+        )
+        deduped.append(winner)
+    deduped.sort(key=lambda item: item.location_id)
+    return deduped
 
 
 def _extract_alias_values(value: Any) -> list[str]:
@@ -270,11 +327,13 @@ def _index_source_features(
     source_features: list[dict[str, Any]],
 ) -> tuple[
     dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
     dict[tuple[str, int], dict[str, Any]],
     dict[tuple[str, str], list[dict[str, Any]]],
     dict[tuple[str, str, str], list[dict[str, Any]]],
 ]:
     by_location_id: dict[str, dict[str, Any]] = {}
+    by_canonical_id: dict[str, dict[str, Any]] = {}
     by_osm: dict[tuple[str, int], dict[str, Any]] = {}
     by_rank_alias: dict[tuple[str, str], list[dict[str, Any]]] = {}
     by_region_pair: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
@@ -291,6 +350,10 @@ def _index_source_features(
         if location_id:
             by_location_id[location_id] = feature
 
+        canonical_id = _coerce_text(properties.get("canonical_id"))
+        if canonical_id:
+            by_canonical_id[canonical_id] = feature
+
         osm_key = _osm_key(
             _coerce_text(properties.get("osm_type")),
             _coerce_int(properties.get("osm_id")),
@@ -299,7 +362,8 @@ def _index_source_features(
             by_osm[osm_key] = feature
 
         location_name = _coerce_text(properties.get("location_name")) or ""
-        for alias in _feature_aliases(properties, "aliases", fallback=location_name):
+        alias_field = "safe_aliases" if rank in {"country", "admin_region"} else "aliases"
+        for alias in _feature_aliases(properties, alias_field, fallback=location_name):
             by_rank_alias.setdefault((rank, alias), []).append(feature)
 
         if rank == "admin_region":
@@ -315,7 +379,7 @@ def _index_source_features(
                 for region_alias in region_aliases:
                     by_region_pair.setdefault(("admin_region", country_alias, region_alias), []).append(feature)
 
-    return by_location_id, by_osm, by_rank_alias, by_region_pair
+    return by_location_id, by_canonical_id, by_osm, by_rank_alias, by_region_pair
 
 
 def _target_aliases(values: list[str | None]) -> set[str]:
@@ -326,6 +390,7 @@ def _select_feature_for_target(
     target: GeometryTarget,
     *,
     by_location_id: dict[str, dict[str, Any]],
+    by_canonical_id: dict[str, dict[str, Any]],
     by_osm: dict[tuple[str, int], dict[str, Any]],
     by_rank_alias: dict[tuple[str, str], list[dict[str, Any]]],
     by_region_pair: dict[tuple[str, str, str], list[dict[str, Any]]],
@@ -333,6 +398,11 @@ def _select_feature_for_target(
     exact = by_location_id.get(target.location_id)
     if exact is not None:
         return exact, "location_id"
+
+    if target.canonical_id:
+        canonical_match = by_canonical_id.get(target.canonical_id)
+        if canonical_match is not None:
+            return canonical_match, "canonical_id"
 
     osm_key = _osm_key(target.osm_type, target.osm_id)
     if osm_key is not None:
@@ -415,7 +485,7 @@ def build_admin_boundaries_asset(
 
     raw = json.loads(source.read_text(encoding="utf-8"))
     source_features = list(raw.get("features") or [])
-    by_location_id, by_osm, by_rank_alias, by_region_pair = _index_source_features(source_features)
+    by_location_id, by_canonical_id, by_osm, by_rank_alias, by_region_pair = _index_source_features(source_features)
 
     selected_features: list[dict[str, Any]] = []
     unmatched_by_rank: dict[str, list[str]] = {rank: [] for rank in POLYGON_RANKS}
@@ -427,6 +497,7 @@ def build_admin_boundaries_asset(
         matched_feature, match_strategy = _select_feature_for_target(
             target,
             by_location_id=by_location_id,
+            by_canonical_id=by_canonical_id,
             by_osm=by_osm,
             by_rank_alias=by_rank_alias,
             by_region_pair=by_region_pair,
@@ -445,6 +516,7 @@ def build_admin_boundaries_asset(
                 "type": "Feature",
                 "properties": {
                     "location_id": target.location_id,
+                    "canonical_id": target.canonical_id,
                     "location_rank": target.location_rank,
                     "location_name": target.location_name,
                     "country_name": target.country_name,

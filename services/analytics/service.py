@@ -19,9 +19,9 @@ ANALYTICS_STEP_NAMES = [
     "bi_documents",
     "bi_locations",
     "bi_document_locations",
-    "bi_location_hierarchy",
     "admin_boundaries_source",
     "admin_boundaries",
+    "bi_location_hierarchy",
 ]
 
 
@@ -359,6 +359,66 @@ def build_bi_location_hierarchy(conn: Connection) -> int:
                     MIN(depth) AS depth
                 FROM chain
                 GROUP BY ancestor_location_id, descendant_location_id
+            ),
+            continent_country AS (
+                SELECT DISTINCT
+                    continent.location_id AS ancestor_location_id,
+                    country.location_id AS country_location_id,
+                    1 AS depth
+                FROM bi_locations continent
+                JOIN bi_admin_boundaries bab
+                    ON bab.location_id = continent.location_id
+                    AND bab.location_rank = 'continent'
+                JOIN bi_locations country
+                    ON COALESCE(NULLIF(LOWER(country.location_rank), ''), 'unknown') = 'country'
+                    AND country.latitude IS NOT NULL
+                    AND country.longitude IS NOT NULL
+                    AND country.latitude = country.latitude
+                    AND country.longitude = country.longitude
+                WHERE
+                    ST_Intersects(
+                        ST_SetSRID(ST_MakePoint(country.longitude, country.latitude), 4326),
+                        ST_SetSRID(ST_GeomFromGeoJSON((bab.feature_json -> 'geometry')::text), 4326)
+                    )
+            ),
+            continent_expanded AS (
+                SELECT
+                    cc.ancestor_location_id,
+                    cc.country_location_id AS descendant_location_id,
+                    cc.depth
+                FROM continent_country cc
+
+                UNION ALL
+
+                SELECT
+                    ce.ancestor_location_id,
+                    d.descendant_location_id,
+                    ce.depth + d.depth AS depth
+                FROM continent_country ce
+                JOIN dedup d ON d.ancestor_location_id = ce.country_location_id
+            ),
+            all_links AS (
+                SELECT
+                    d.ancestor_location_id,
+                    d.descendant_location_id,
+                    d.depth
+                FROM dedup d
+
+                UNION ALL
+
+                SELECT
+                    ce.ancestor_location_id,
+                    ce.descendant_location_id,
+                    ce.depth
+                FROM continent_expanded ce
+            ),
+            all_dedup AS (
+                SELECT
+                    ancestor_location_id,
+                    descendant_location_id,
+                    MIN(depth) AS depth
+                FROM all_links
+                GROUP BY ancestor_location_id, descendant_location_id
             )
             INSERT INTO bi_location_hierarchy
                 (ancestor_location_id, descendant_location_id, depth)
@@ -366,7 +426,7 @@ def build_bi_location_hierarchy(conn: Connection) -> int:
                 d.ancestor_location_id,
                 d.descendant_location_id,
                 d.depth
-            FROM dedup d
+            FROM all_dedup d
             """
         )
         return cur.rowcount
@@ -378,9 +438,9 @@ def rebuild_analytics(*, on_step: AnalyticsStepCallback | None = None, start_ind
         ("bi_documents", build_bi_documents),
         ("bi_locations", build_bi_locations),
         ("bi_document_locations", build_bi_document_locations),
-        ("bi_location_hierarchy", build_bi_location_hierarchy),
         ("admin_boundaries_source", build_admin_boundaries_source),
         ("admin_boundaries", lambda conn: build_admin_boundaries_asset(conn).features_written),
+        ("bi_location_hierarchy", build_bi_location_hierarchy),
     ]
     if start_index < 0:
         start_index = 0

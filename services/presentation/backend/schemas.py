@@ -27,6 +27,12 @@ class LocationDocumentsResponse(BaseModel):
     requested_location_id: str
     resolved_location_id: str | None = None
     fallback_depth: int | None = None
+    scope_rank: str | None = None
+    scope_location_count: int = 0
+    total_items: int = 0
+    returned_items: int = 0
+    limit: int = 0
+    offset: int = 0
     items: list[DocumentCard]
 
 

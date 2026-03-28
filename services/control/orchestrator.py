@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from typing import Any
@@ -19,36 +18,27 @@ from services.geocoder import (
     normalize_pending_mentions,
     process_all_mentions,
     process_pending_mentions,
+    refresh_canonical_dictionary,
 )
 
 
 logger = logging.getLogger(__name__)
 
-
-def _stage_item_limit() -> int | None:
-    raw_value = os.getenv("DOCMAP_STAGE_ITEM_LIMIT")
-    if raw_value is None:
-        return 20
-    raw_value = raw_value.strip()
-    if raw_value == "" or raw_value.lower() == "all" or raw_value == "0":
-        return None
-    try:
-        parsed = int(raw_value)
-        if parsed > 0:
-            return parsed
-    except ValueError:
-        pass
-    logger.warning("control.orchestrator.invalid_stage_item_limit value=%s fallback=20", raw_value)
-    return 20
-
-
-TEST_STAGE_ITEM_LIMIT = _stage_item_limit()
+STAGE_ITEM_LIMIT: int | None = None
 
 
 def _refresh_geo_identity_requested(run: dict[str, Any]) -> bool:
     params = run.get("parameters_json") or {}
     options = params.get("options") or {}
     return bool(options.get("refresh_geo_identity"))
+
+
+def _refresh_canonical_dictionary_requested(run: dict[str, Any]) -> bool | None:
+    params = run.get("parameters_json") or {}
+    options = params.get("options") or {}
+    if "refresh_canonical_dictionary" in options:
+        return bool(options.get("refresh_canonical_dictionary"))
+    return None
 
 
 class ControlOrchestrator:
@@ -409,9 +399,9 @@ class ControlOrchestrator:
                 end = int(params["document_range"].get("end", start))
                 urls = generate_scp_urls(start, end)
             else:
-                crawl_end = TEST_STAGE_ITEM_LIMIT if TEST_STAGE_ITEM_LIMIT is not None else 7999
+                crawl_end = STAGE_ITEM_LIMIT if STAGE_ITEM_LIMIT is not None else 7999
                 urls = generate_scp_urls(1, crawl_end)
-                if TEST_STAGE_ITEM_LIMIT is None:
+                if STAGE_ITEM_LIMIT is None:
                     self.repository.append_log(
                         run_id,
                         stage,
@@ -426,7 +416,7 @@ class ControlOrchestrator:
                         stage,
                         "pipeline",
                         "INFO",
-                        f"Stage processing limited to first {TEST_STAGE_ITEM_LIMIT} items",
+                        f"Stage processing limited to first {STAGE_ITEM_LIMIT} items",
                         event_type="progress",
                     )
 
@@ -695,8 +685,8 @@ class ControlOrchestrator:
                         current_index=overall_processed,
                     )
 
-            extract_limit = TEST_STAGE_ITEM_LIMIT if TEST_STAGE_ITEM_LIMIT is not None else 2147483647
-            if TEST_STAGE_ITEM_LIMIT is None:
+            extract_limit = STAGE_ITEM_LIMIT if STAGE_ITEM_LIMIT is not None else 2147483647
+            if STAGE_ITEM_LIMIT is None:
                 self.repository.append_log(
                     run_id,
                     stage,
@@ -711,7 +701,7 @@ class ControlOrchestrator:
                     stage,
                     "pipeline",
                     "INFO",
-                    f"Stage processing limited to first {TEST_STAGE_ITEM_LIMIT} items",
+                    f"Stage processing limited to first {STAGE_ITEM_LIMIT} items",
                     event_type="progress",
                 )
             extract_fn = process_pending_snapshots if process_unprocessed_only else process_all_snapshots
@@ -755,6 +745,52 @@ class ControlOrchestrator:
             stop_requested = False
             normalized = 0
             normalized_scanned = 0
+            if start_index == 0:
+                refresh_report = refresh_canonical_dictionary(
+                    enabled=_refresh_canonical_dictionary_requested(run),
+                )
+                if refresh_report.get("executed"):
+                    counts = refresh_report.get("counts") or {}
+                    diagnostics = refresh_report.get("diagnostics") or {}
+                    autoseeded = bool(refresh_report.get("autoseeded"))
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "geocoder",
+                        "INFO",
+                        (
+                            "canonical dictionary refresh completed: "
+                            f"places={counts.get('places', 0)} aliases={counts.get('aliases', 0)} "
+                            f"concordances={counts.get('concordances', 0)} "
+                            f"safe_alias_collisions={diagnostics.get('safe_alias_collision_count', 0)} "
+                            f"autoseeded={autoseeded}"
+                        ),
+                        event_type="progress",
+                        current_index=0,
+                    )
+                else:
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "geocoder",
+                        "INFO",
+                        (
+                            "canonical dictionary refresh skipped: "
+                            f"{refresh_report.get('reason', 'unknown')}"
+                        ),
+                        event_type="progress",
+                        current_index=0,
+                    )
+            else:
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "geocoder",
+                    "INFO",
+                    "Resume mode: canonical dictionary refresh skipped because stage index > 0",
+                    event_type="progress",
+                    current_index=start_index,
+                )
 
             def on_normalize_progress(processed: int, updated: int, invalid: int) -> None:
                 nonlocal normalized, normalized_scanned, stop_requested
@@ -795,8 +831,8 @@ class ControlOrchestrator:
                     current_index=processed,
                 )
 
-            geocode_limit = TEST_STAGE_ITEM_LIMIT if TEST_STAGE_ITEM_LIMIT is not None else 2147483647
-            if TEST_STAGE_ITEM_LIMIT is None:
+            geocode_limit = STAGE_ITEM_LIMIT if STAGE_ITEM_LIMIT is not None else 2147483647
+            if STAGE_ITEM_LIMIT is None:
                 self.repository.append_log(
                     run_id,
                     stage,
@@ -811,7 +847,7 @@ class ControlOrchestrator:
                     stage,
                     "pipeline",
                     "INFO",
-                    f"Stage processing limited to first {TEST_STAGE_ITEM_LIMIT} items",
+                    f"Stage processing limited to first {STAGE_ITEM_LIMIT} items",
                     event_type="progress",
                 )
             if process_unprocessed_only:
