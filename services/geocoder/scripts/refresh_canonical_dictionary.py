@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 ALIAS_TYPES = {"exact_name", "language_variant", "historic_name", "unsafe_parent_ref"}
 SAFE_ALIAS_TYPES = {"exact_name", "language_variant"}
-PLACE_TYPES = {"city", "admin_region", "country", "continent", "ocean", "unknown"}
+PLACE_TYPES = {"city", "admin_region", "country", "continent", "ocean", "national_park", "desert", "unknown"}
 NON_ALNUM_RE = re.compile(r"[^a-z0-9\s]+")
 
 
@@ -51,6 +51,8 @@ def _normalize_place_type(value: str | None) -> str:
     normalized = (value or "").strip().lower()
     if normalized == "region":
         normalized = "admin_region"
+    if normalized.startswith("admin_level_"):
+        return normalized
     if normalized not in PLACE_TYPES:
         return "unknown"
     return normalized

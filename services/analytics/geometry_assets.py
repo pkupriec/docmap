@@ -9,17 +9,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import requests
 from psycopg import Connection
 
 logger = logging.getLogger(__name__)
 
-POLYGON_RANKS = ("admin_region", "country", "continent", "ocean")
+BASE_POLYGON_RANKS = ("admin_region", "country", "continent", "ocean", "national_park", "desert")
+_ADMIN_LEVEL_PATTERN = re.compile(r"^admin_level_(\d+)$")
 RANK_ALIAS = {
     "region": "admin_region",
     "admin_region": "admin_region",
     "country": "country",
     "continent": "continent",
     "ocean": "ocean",
+    "national_park": "national_park",
+    "desert": "desert",
     "city": "city",
     "unknown": "unknown",
 }
@@ -28,7 +32,9 @@ RANK_ORDER = {
     "admin_region": 1,
     "continent": 2,
     "ocean": 3,
-    "unknown": 4,
+    "national_park": 4,
+    "desert": 5,
+    "unknown": 99,
 }
 NAME_SPLIT_RE = re.compile(r"[|/;]+")
 NON_ALNUM_RE = re.compile(r"[^a-z0-9\s]+")
@@ -45,6 +51,11 @@ class GeometryTarget:
     document_count: int
     osm_type: str | None
     osm_id: int | None
+    osm_admin_level: int | None
+    boundary_intent: bool
+    geocode_candidates: list[dict[str, Any]]
+    osm_category: str | None
+    osm_place_type: str | None
     canonical_resolution_method: str | None
     canonical_confidence: int | None
 
@@ -96,7 +107,14 @@ def _normalize(value: str | None) -> str:
 
 def _normalize_rank(value: str | None) -> str:
     normalized = _normalize(value)
+    if _ADMIN_LEVEL_PATTERN.match(normalized):
+        return normalized
     return RANK_ALIAS.get(normalized, normalized or "unknown")
+
+
+def _is_polygon_rank(rank: str) -> bool:
+    normalized = _normalize_rank(rank)
+    return normalized in BASE_POLYGON_RANKS or _ADMIN_LEVEL_PATTERN.match(normalized) is not None
 
 
 def _feature_geometry_supported(feature: dict[str, Any]) -> bool:
@@ -189,6 +207,19 @@ def _infer_rank_from_row(
     return "unknown"
 
 
+def _entity_class_for_rank(rank: str) -> str:
+    normalized = _normalize_rank(rank)
+    if normalized in {"country", "admin_region", "continent"} or _ADMIN_LEVEL_PATTERN.match(normalized):
+        return "admin"
+    if normalized == "national_park":
+        return "park"
+    if normalized == "desert":
+        return "desert"
+    if normalized == "ocean":
+        return "ocean"
+    return "other"
+
+
 def _query_targets(conn: Connection) -> list[GeometryTarget]:
     with conn.cursor() as cur:
         cur.execute(
@@ -204,6 +235,11 @@ def _query_targets(conn: Connection) -> list[GeometryTarget]:
                 bl.location_rank,
                 gl.osm_type,
                 gl.osm_id,
+                gl.osm_admin_level,
+                gl.boundary_intent,
+                gl.geocode_candidates,
+                gl.osm_category,
+                gl.osm_place_type,
                 gl.canonical_id,
                 gl.canonical_resolution_method,
                 gl.canonical_confidence
@@ -223,8 +259,6 @@ def _query_targets(conn: Connection) -> list[GeometryTarget]:
             region=_coerce_text(row[3]),
             country=_coerce_text(row[2]),
         )
-        if location_rank not in POLYGON_RANKS:
-            continue
         document_count_raw = row[5]
         if isinstance(document_count_raw, int):
             document_count = document_count_raw
@@ -233,7 +267,6 @@ def _query_targets(conn: Connection) -> list[GeometryTarget]:
         targets.append(
             GeometryTarget(
                 location_id=str(row[0]),
-                canonical_id=_coerce_text(row[10]),
                 location_name=str(row[1]),
                 location_rank=location_rank,
                 country_name=_coerce_text(row[2]),
@@ -241,16 +274,27 @@ def _query_targets(conn: Connection) -> list[GeometryTarget]:
                 document_count=document_count,
                 osm_type=_coerce_text(row[8]),
                 osm_id=_coerce_int(row[9]),
-                canonical_resolution_method=_coerce_text(row[11]),
-                canonical_confidence=_coerce_int(row[12]),
+                osm_admin_level=_coerce_int(row[10]),
+                boundary_intent=bool(row[11]) if row[11] is not None else False,
+                geocode_candidates=list(row[12]) if isinstance(row[12], list) else [],
+                osm_category=_coerce_text(row[13]),
+                osm_place_type=_coerce_text(row[14]),
+                canonical_id=_coerce_text(row[15]),
+                canonical_resolution_method=_coerce_text(row[16]),
+                canonical_confidence=_coerce_int(row[17]),
             )
         )
-    return _dedupe_alias_targets(targets)
+    targets.sort(key=lambda item: item.location_id)
+    return targets
 
 
 def _target_alias_key(target: GeometryTarget) -> tuple[str, str, str] | None:
     if target.location_rank == "country":
-        country_key = _normalize(target.country_name)
+        # Country dedupe must be keyed by the target display identity first.
+        # `country_name` can legitimately collide for distinct normalized country targets
+        # (for example "Democratic Republic of the Congo" vs "Congo"), and collapsing
+        # those targets drops valid per-location boundaries in presentation.
+        country_key = _normalize(target.location_name) or _normalize(target.country_name)
         if country_key:
             return ("country", country_key, "")
     if target.location_rank == "admin_region":
@@ -275,42 +319,9 @@ def _target_priority(target: GeometryTarget) -> tuple[int, int, int, int, str]:
 
 
 def _dedupe_alias_targets(targets: list[GeometryTarget]) -> list[GeometryTarget]:
-    grouped: dict[tuple[str, str, str], list[GeometryTarget]] = {}
-    passthrough: list[GeometryTarget] = []
-    for target in targets:
-        key = _target_alias_key(target)
-        if key is None:
-            passthrough.append(target)
-            continue
-        grouped.setdefault(key, []).append(target)
-
-    deduped = list(passthrough)
-    for key, group in grouped.items():
-        if len(group) == 1:
-            deduped.append(group[0])
-            continue
-        winner = max(group, key=_target_priority)
-        dropped = sorted(item.location_id for item in group if item.location_id != winner.location_id)
-        dropped_unresolved_for_resolved = sorted(
-            item.location_id
-            for item in group
-            if item.location_id != winner.location_id and winner.canonical_id and not item.canonical_id
-        )
-        logger.warning(
-            (
-                "analytics.admin_boundaries_target_alias_collision key=%s kept=%s "
-                "kept_canonical_id=%s kept_method=%s dropped=%s dropped_unresolved_for_resolved=%s"
-            ),
-            key,
-            winner.location_id,
-            winner.canonical_id,
-            winner.canonical_resolution_method,
-            dropped,
-            dropped_unresolved_for_resolved,
-        )
-        deduped.append(winner)
-    deduped.sort(key=lambda item: item.location_id)
-    return deduped
+    # Phase 19 direct cutover removes lossy alias dedupe: distinct geocoded targets
+    # remain distinct geometry targets even if aliases collide.
+    return sorted(targets, key=lambda item: item.location_id)
 
 
 def _extract_alias_values(value: Any) -> list[str]:
@@ -348,6 +359,70 @@ def _pick_unique_feature(features: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
+def _candidate_osm_keys(target: GeometryTarget) -> list[tuple[str, int]]:
+    keys: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    if target.geocode_candidates:
+        ordered = sorted(
+            target.geocode_candidates,
+            key=lambda item: (
+                0 if _normalize(_coerce_text(item.get("role"))) == "boundary" else 1,
+                _normalize(_coerce_text(item.get("osm_type"))),
+                int(_coerce_int(item.get("osm_id")) or 0),
+            ),
+        )
+        for candidate in ordered:
+            key = _osm_key(_coerce_text(candidate.get("osm_type")), _coerce_int(candidate.get("osm_id")))
+            if key is None or key in seen:
+                continue
+            seen.add(key)
+            keys.append(key)
+    fallback = _osm_key(target.osm_type, target.osm_id)
+    if fallback is not None and fallback not in seen:
+        keys.append(fallback)
+    return keys
+
+
+def _osm_lookup_url(osm_type: str, osm_id: int) -> str:
+    prefix = {"relation": "R", "way": "W", "node": "N"}.get(osm_type.lower())
+    if prefix is None:
+        raise ValueError(f"unsupported osm_type: {osm_type}")
+    return (
+        "https://nominatim.openstreetmap.org/lookup"
+        f"?osm_ids={prefix}{osm_id}&format=jsonv2&polygon_geojson=1"
+    )
+
+
+def _fetch_osm_feature(osm_type: str, osm_id: int) -> dict[str, Any] | None:
+    response = requests.get(
+        _osm_lookup_url(osm_type, osm_id),
+        headers={"User-Agent": "docmap-analytics/0.1"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list) or not payload:
+        return None
+    row = payload[0]
+    if not isinstance(row, dict):
+        return None
+    geometry = row.get("geojson")
+    if not isinstance(geometry, dict):
+        return None
+    if str(geometry.get("type") or "") not in {"Polygon", "MultiPolygon"}:
+        return None
+    return {
+        "type": "Feature",
+        "properties": {
+            "osm_type": osm_type,
+            "osm_id": osm_id,
+            "location_rank": _normalize_rank(_coerce_text(row.get("addresstype"))),
+            "location_name": _coerce_text(row.get("name")) or _coerce_text(row.get("display_name")) or "",
+        },
+        "geometry": geometry,
+    }
+
+
 def _index_source_features(
     source_features: list[dict[str, Any]],
 ) -> tuple[
@@ -368,7 +443,7 @@ def _index_source_features(
             continue
         properties = feature.get("properties") or {}
         rank = _normalize_rank(_coerce_text(properties.get("location_rank")))
-        if rank not in POLYGON_RANKS:
+        if not _is_polygon_rank(rank):
             continue
 
         location_id = _coerce_text(properties.get("location_id"))
@@ -429,9 +504,9 @@ def _select_feature_for_target(
         if canonical_match is not None:
             return canonical_match, "canonical_id"
 
-    osm_key = _osm_key(target.osm_type, target.osm_id)
-    if osm_key is not None:
-        osm_match = by_osm.get(osm_key)
+    candidate_osm_keys = _candidate_osm_keys(target)
+    for candidate_key in candidate_osm_keys:
+        osm_match = by_osm.get(candidate_key)
         if osm_match is not None:
             return osm_match, "osm_identity"
 
@@ -453,7 +528,32 @@ def _select_feature_for_target(
     ranked_match = _pick_unique_feature(ranked_candidates)
     if ranked_match is not None:
         return ranked_match, "rank_alias"
-    return None, "unmatched"
+
+    if target.location_rank == "country":
+        country_aliases = _target_aliases([target.country_name])
+        country_candidates: list[dict[str, Any]] = []
+        for alias in country_aliases:
+            country_candidates.extend(by_rank_alias.get(("country", alias), []))
+        country_match = _pick_unique_feature(country_candidates)
+        if country_match is not None:
+            return country_match, "country_alias"
+    for candidate_key in candidate_osm_keys:
+        try:
+            osm_feature = _fetch_osm_feature(candidate_key[0], candidate_key[1])
+        except requests.RequestException:
+            logger.warning(
+                "analytics.osm_lookup_failed osm_type=%s osm_id=%s location_id=%s",
+                candidate_key[0],
+                candidate_key[1],
+                target.location_id,
+            )
+            continue
+        if osm_feature is not None:
+            return osm_feature, "osm_live_identity"
+
+    if not target.canonical_id and not candidate_osm_keys:
+        return None, "impossible_missing_upstream_data"
+    return None, "possible_but_unmatched"
 
 
 def _target_label(target: GeometryTarget) -> str:
@@ -465,7 +565,11 @@ def _target_label(target: GeometryTarget) -> str:
 
 
 def _rank_sort_value(rank: str) -> int:
-    return RANK_ORDER.get(rank, 99)
+    normalized = _normalize_rank(rank)
+    admin_match = _ADMIN_LEVEL_PATTERN.match(normalized)
+    if admin_match is not None:
+        return 10 + int(admin_match.group(1))
+    return RANK_ORDER.get(normalized, 99)
 
 
 def _store_boundaries_in_db(conn: Connection, features: list[dict[str, Any]]) -> None:
@@ -513,9 +617,12 @@ def build_admin_boundaries_asset(
     by_location_id, by_canonical_id, by_osm, by_rank_alias, by_region_pair = _index_source_features(source_features)
 
     selected_features: list[dict[str, Any]] = []
-    unmatched_by_rank: dict[str, list[str]] = {rank: [] for rank in POLYGON_RANKS}
-    matched_by_rank: dict[str, int] = {rank: 0 for rank in POLYGON_RANKS}
-    total_by_rank: dict[str, int] = {rank: 0 for rank in POLYGON_RANKS}
+    unmatched_by_rank: dict[str, list[str]] = {}
+    matched_by_rank: dict[str, int] = {}
+    total_by_rank: dict[str, int] = {}
+    unmatched_by_reason: dict[str, int] = {}
+    unmatched_by_class: dict[str, int] = {}
+    match_strategy_counts: dict[str, int] = {}
 
     for target in targets:
         total_by_rank[target.location_rank] = total_by_rank.get(target.location_rank, 0) + 1
@@ -529,13 +636,18 @@ def build_admin_boundaries_asset(
         )
         if matched_feature is None:
             unmatched_by_rank.setdefault(target.location_rank, []).append(_target_label(target))
+            unmatched_by_reason[match_strategy] = unmatched_by_reason.get(match_strategy, 0) + 1
+            entity_class = _entity_class_for_rank(target.location_rank)
+            unmatched_by_class[entity_class] = unmatched_by_class.get(entity_class, 0) + 1
             continue
 
         geometry = matched_feature.get("geometry")
         if not isinstance(geometry, dict):
             unmatched_by_rank.setdefault(target.location_rank, []).append(_target_label(target))
+            unmatched_by_reason["invalid_geometry"] = unmatched_by_reason.get("invalid_geometry", 0) + 1
             continue
 
+        match_strategy_counts[match_strategy] = match_strategy_counts.get(match_strategy, 0) + 1
         selected_features.append(
             {
                 "type": "Feature",
@@ -547,6 +659,7 @@ def build_admin_boundaries_asset(
                     "country_name": target.country_name,
                     "region_name": target.region_name,
                     "match_strategy": match_strategy,
+                    "entity_class": _entity_class_for_rank(target.location_rank),
                 },
                 "geometry": geometry,
             }
@@ -573,7 +686,8 @@ def build_admin_boundaries_asset(
     )
 
     rank_coverage: dict[str, dict[str, Any]] = {}
-    for rank in POLYGON_RANKS:
+    all_ranks = sorted(set(total_by_rank.keys()) | set(matched_by_rank.keys()) | set(unmatched_by_rank.keys()))
+    for rank in all_ranks:
         rank_coverage[rank] = {
             "targets": total_by_rank.get(rank, 0),
             "matched": matched_by_rank.get(rank, 0),
@@ -594,6 +708,9 @@ def build_admin_boundaries_asset(
             "regions": total_by_rank.get("admin_region", 0),
         },
         "coverage_by_rank": rank_coverage,
+        "match_strategy_counts": match_strategy_counts,
+        "unmatched_by_reason": unmatched_by_reason,
+        "unmatched_by_class": unmatched_by_class,
         "unmatched": unmatched_by_rank,
     }
     coverage.write_text(json.dumps(coverage_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

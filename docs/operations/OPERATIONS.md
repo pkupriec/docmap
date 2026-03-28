@@ -32,6 +32,21 @@ Stop:
 - `GET /api/runs/{run_id}/logs`
 - `GET /api/runs/{run_id}/events`
 
+## Geocode Reprocessing Modes
+
+Standard full geocode refresh (default behavior):
+- canonical dictionary refresh is enabled by default
+- refresh of missing geo identity/candidate fields is enabled by default
+
+From-scratch geo refresh:
+- set `options.full_refresh_geo_information=true` on `POST /api/runs`
+- this forces re-geocode of cached rows instead of linking existing cache
+
+UI behavior:
+- Control UI exposes one geocode/full toggle:
+  `Full refresh of geoinformation (re-geocode all cached geo rows from scratch)`
+- canonical refresh and missing-identity refresh are default-on and not shown as separate toggles
+
 ## Presentation API Operations
 
 - `GET /api/map/locations`

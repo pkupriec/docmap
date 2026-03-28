@@ -370,6 +370,7 @@ def test_geocode_full_mode_uses_all_mentions(monkeypatch: pytest.MonkeyPatch) ->
     repo = _StageRepo()
     orchestrator = ControlOrchestrator(repository=repo)
     captured: dict[str, object] = {}
+    refresh_captured: dict[str, object] = {}
     monkeypatch.setattr(
         orchestrator_module,
         "get_connection",
@@ -379,7 +380,7 @@ def test_geocode_full_mode_uses_all_mentions(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         orchestrator_module,
         "refresh_canonical_dictionary",
-        lambda **kwargs: {"executed": False, "reason": "test"},
+        lambda **kwargs: refresh_captured.update(kwargs) or {"executed": False, "reason": "test"},
     )
     monkeypatch.setattr(orchestrator_module, "count_all_mentions", lambda _conn: 10)
     monkeypatch.setattr(orchestrator_module, "count_pending_mentions", lambda _conn: 3)
@@ -403,7 +404,9 @@ def test_geocode_full_mode_uses_all_mentions(monkeypatch: pytest.MonkeyPatch) ->
 
     assert captured["offset"] == 0
     assert captured["reset_existing_links"] is True
-    assert captured["refresh_missing_identity"] is False
+    assert captured["refresh_missing_identity"] is True
+    assert captured["force_full_refresh"] is False
+    assert refresh_captured.get("enabled") is True
     assert "on_mention" in captured
 
 
@@ -438,6 +441,7 @@ def test_geocode_full_mode_passes_refresh_geo_identity(monkeypatch: pytest.Monke
     orchestrator._run_stage(1, "geocode", run)
 
     assert captured["refresh_missing_identity"] is True
+    assert captured["force_full_refresh"] is False
 
 
 def test_geocode_unprocessed_mode_uses_pending_mentions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -477,6 +481,71 @@ def test_geocode_unprocessed_mode_uses_pending_mentions(monkeypatch: pytest.Monk
 
     assert captured["offset"] == 0
     assert "on_mention" in captured
+
+
+def test_geocode_can_disable_canonical_refresh_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _StageRepo()
+    orchestrator = ControlOrchestrator(repository=repo)
+    refresh_captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_connection",
+        lambda: __import__("contextlib").nullcontext(object()),
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "refresh_canonical_dictionary",
+        lambda **kwargs: refresh_captured.update(kwargs) or {"executed": False, "reason": "disabled-for-test"},
+    )
+    monkeypatch.setattr(orchestrator_module, "count_all_mentions", lambda _conn: 0)
+    monkeypatch.setattr(orchestrator_module, "count_pending_mentions", lambda _conn: 0)
+    monkeypatch.setattr(orchestrator_module, "normalize_pending_mentions", lambda **kwargs: 0)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "process_all_mentions",
+        lambda **kwargs: SimpleNamespace(processed=0, linked=0, unresolved=0),
+    )
+
+    run = {
+        "target_scope": "all",
+        "parameters_json": {"options": {"refresh_canonical_dictionary": False}},
+    }
+    orchestrator._run_stage(1, "geocode", run)
+
+    assert refresh_captured.get("enabled") is False
+
+
+def test_geocode_full_mode_can_force_full_geo_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _StageRepo()
+    orchestrator = ControlOrchestrator(repository=repo)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_connection",
+        lambda: __import__("contextlib").nullcontext(object()),
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "refresh_canonical_dictionary",
+        lambda **kwargs: {"executed": True, "counts": {}, "diagnostics": {}},
+    )
+    monkeypatch.setattr(orchestrator_module, "count_all_mentions", lambda _conn: 0)
+    monkeypatch.setattr(orchestrator_module, "count_pending_mentions", lambda _conn: 0)
+    monkeypatch.setattr(orchestrator_module, "normalize_pending_mentions", lambda **kwargs: 0)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "process_all_mentions",
+        lambda **kwargs: captured.update(kwargs) or SimpleNamespace(processed=0, linked=0, unresolved=0),
+    )
+
+    run = {
+        "target_scope": "all",
+        "parameters_json": {"options": {"full_refresh_geo_information": True}},
+    }
+    orchestrator._run_stage(1, "geocode", run)
+
+    assert captured["refresh_missing_identity"] is True
+    assert captured["force_full_refresh"] is True
 
 
 def test_enqueue_followup_analytics_for_refresh_geocode_only() -> None:

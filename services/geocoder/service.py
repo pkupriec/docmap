@@ -149,6 +149,7 @@ def process_pending_mentions(
         on_mention=on_mention,
         should_stop=should_stop,
         refresh_missing_identity=False,
+        force_full_refresh=False,
     )
 
 
@@ -158,18 +159,20 @@ def process_all_mentions(
     offset: int = 0,
     reset_existing_links: bool = False,
     refresh_missing_identity: bool = False,
+    force_full_refresh: bool = False,
     on_mention: MentionCallback | None = None,
     should_stop: StopCallback | None = None,
 ) -> GeocodeBatchResult:
     logger.info(
         (
             "geocoder.batch_start mode=all limit=%s offset=%s "
-            "reset_existing_links=%s refresh_missing_identity=%s"
+            "reset_existing_links=%s refresh_missing_identity=%s force_full_refresh=%s"
         ),
         limit,
         offset,
         reset_existing_links,
         refresh_missing_identity,
+        force_full_refresh,
     )
     with get_connection() as conn:
         if reset_existing_links and offset == 0:
@@ -182,6 +185,7 @@ def process_all_mentions(
         on_mention=on_mention,
         should_stop=should_stop,
         refresh_missing_identity=refresh_missing_identity,
+        force_full_refresh=force_full_refresh,
     )
 
 
@@ -191,6 +195,7 @@ def _process_mentions(
     on_mention: MentionCallback | None,
     should_stop: StopCallback | None,
     refresh_missing_identity: bool,
+    force_full_refresh: bool,
 ) -> GeocodeBatchResult:
     with get_connection() as conn:
         geocoded = 0
@@ -209,6 +214,7 @@ def _process_mentions(
                     conn,
                     mention,
                     refresh_missing_identity=refresh_missing_identity,
+                    force_full_refresh=force_full_refresh,
                 )
                 # Atomic unit of work is one mention: commit each item independently.
                 conn.commit()
@@ -254,9 +260,42 @@ def _process_single_mention(
     mention: PendingMention,
     *,
     refresh_missing_identity: bool = False,
+    force_full_refresh: bool = False,
 ) -> str:
     cached = get_geo_location_cache_entry(conn, mention.normalized_location)
     if cached:
+        if force_full_refresh:
+            geocoded = geocode_location(mention.normalized_location)
+            if not geocoded:
+                logger.warning(
+                    (
+                        "geocoder.full_refresh_unresolved mention_id=%s "
+                        "normalized_location=%s old_location_id=%s"
+                    ),
+                    mention.mention_id,
+                    mention.normalized_location,
+                    cached.location_id,
+                )
+                return "unresolved"
+            location_id = save_geo_location(conn, geocoded)
+            link_document_location(
+                conn,
+                document_id=mention.document_id,
+                location_id=location_id,
+                mention_id=mention.mention_id,
+            )
+            logger.info(
+                (
+                    "geocoder.full_refresh_success mention_id=%s normalized_location=%s "
+                    "old_location_id=%s new_location_id=%s"
+                ),
+                mention.mention_id,
+                mention.normalized_location,
+                cached.location_id,
+                location_id,
+            )
+            return "geocoded_and_linked"
+
         if _should_refresh_missing_identity(cached, refresh_missing_identity=refresh_missing_identity):
             geocoded = geocode_location(mention.normalized_location)
             if geocoded:
@@ -340,4 +379,5 @@ def _should_refresh_missing_identity(cache_entry: GeoLocationCacheEntry, *, refr
     has_osm_identity = bool(cache_entry.osm_type and cache_entry.osm_id is not None)
     has_bbox = cache_entry.osm_boundingbox is not None
     has_canonical = bool(cache_entry.canonical_id)
-    return not (has_rank and has_osm_identity and has_bbox and has_canonical)
+    has_candidates = bool(cache_entry.geocode_candidates)
+    return not (has_rank and has_osm_identity and has_bbox and has_canonical and has_candidates)

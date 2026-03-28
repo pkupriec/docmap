@@ -41,12 +41,14 @@ Resume stage is implemented as `retry_stage` with payload `{ "resume": true }`.
 
 `StartRunRequest.options` is an open object. Current orchestrator behavior uses:
 - `process_unprocessed_only`
-- `refresh_canonical_dictionary`
-- `refresh_geo_identity`
+- `refresh_canonical_dictionary` (default `true` for geocode/full runs)
+- `refresh_geo_identity` (default `true` for geocode/full runs)
+- `full_refresh_geo_information` (default `false`; force full re-geocode of cached rows)
 
 Notable semantics:
 - `refresh_canonical_dictionary` controls canonical table refresh at geocode stage start.
-- `refresh_geo_identity` enables re-geocoding cache entries missing rank/OSM/bbox/canonical identity.
+- `refresh_geo_identity` re-geocodes cache entries missing required identity/candidate fields.
+- `full_refresh_geo_information` bypasses cache-link reuse and re-geocodes every cached location from scratch.
 - if `refresh_geo_identity` is used in full geocode mode, orchestrator auto-enqueues follow-up `analytics_only` run.
 
 ## Resume and Retry Semantics

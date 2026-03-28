@@ -44,6 +44,8 @@ Notes:
 - `fallback_depth` is alias-resolution depth from repository logic, not hierarchy depth.
 - `total_items` is full result count before paging.
 - `returned_items` is the page item count after dedupe.
+- For non-city scopes, document aggregation uses selected geometry + recursive descendants from `bi_location_hierarchy`.
+- City scope remains city-only unless city polygons/hierarchy descendants exist.
 
 ## Document -> Locations Response (`GET /api/map/document/{document_id}/locations`)
 

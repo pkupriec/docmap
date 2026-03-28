@@ -21,6 +21,47 @@ _OCEAN_TOKENS = (
     "channel",
     "fjord",
 )
+_BOUNDARY_INTENT_TOKENS = (
+    "boundary",
+    "borders",
+    "country",
+    "state",
+    "province",
+    "region",
+    "district",
+    "county",
+    "prefecture",
+    "oblast",
+    "territory",
+    "municipality",
+    "park",
+    "desert",
+)
+_POINT_LIKE_TYPES = {
+    "city",
+    "town",
+    "village",
+    "hamlet",
+    "locality",
+    "neighbourhood",
+    "suburb",
+    "quarter",
+    "borough",
+}
+_BOUNDARY_LIKE_TYPES = {
+    "administrative",
+    "boundary",
+    "country",
+    "state",
+    "province",
+    "region",
+    "county",
+    "district",
+    "municipality",
+    "national_park",
+    "protected_area",
+    "desert",
+}
 _OCEAN_TOKEN_PATTERN = re.compile(
     r"(?<![a-z0-9])(?:%s)(?![a-z0-9])" % "|".join(re.escape(token) for token in _OCEAN_TOKENS),
     flags=re.IGNORECASE,
@@ -107,6 +148,17 @@ def _as_int_or_none(value: Any) -> int | None:
         return None
 
 
+def _as_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_text(value: Any) -> str:
     if value is None:
         return ""
@@ -125,6 +177,154 @@ def _normalize_boundingbox(value: Any) -> list[float] | None:
     return result
 
 
+def _extract_admin_level(payload: dict[str, Any]) -> int | None:
+    extratags = payload.get("extratags")
+    if isinstance(extratags, dict):
+        level = _as_int_or_none(extratags.get("admin_level"))
+        if level is not None:
+            return level
+    return _as_int_or_none(payload.get("admin_level"))
+
+
+def _search_nominatim(
+    *,
+    endpoint: str,
+    user_agent: str,
+    query: str,
+    limit: int,
+    timeout_seconds: int,
+    max_retries: int,
+) -> list[dict[str, Any]]:
+    last_error: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            _throttle_requests()
+            response = requests.get(
+                endpoint,
+                params={
+                    "q": query,
+                    "format": "jsonv2",
+                    "addressdetails": 1,
+                    "namedetails": 1,
+                    "extratags": 1,
+                    "limit": limit,
+                },
+                headers={"User-Agent": user_agent},
+                timeout=timeout_seconds,
+            )
+            if response.status_code == 429:
+                retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+                backoff_seconds = retry_after if retry_after is not None else 2 ** (attempt - 1)
+                logger.warning(
+                    "geocoder.nominatim_rate_limited query=%s attempt=%s backoff_seconds=%s",
+                    query,
+                    attempt,
+                    round(backoff_seconds, 2),
+                )
+                if attempt < max_retries:
+                    time.sleep(backoff_seconds)
+                    continue
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, list):
+                return []
+            return [row for row in payload if isinstance(row, dict)]
+        except (requests.RequestException, ValueError) as exc:
+            last_error = exc
+            if attempt == max_retries:
+                break
+            backoff_seconds = 2 ** (attempt - 1)
+            logger.warning(
+                "geocoder.nominatim_retry query=%s attempt=%s backoff_seconds=%s reason=%s",
+                query,
+                attempt,
+                backoff_seconds,
+                type(exc).__name__,
+            )
+            time.sleep(backoff_seconds)
+
+    if last_error is not None:
+        logger.warning(
+            "geocoder.nominatim_query_failed query=%s max_retries=%s reason=%s",
+            query,
+            max_retries,
+            type(last_error).__name__,
+        )
+    return []
+
+
+def _detect_boundary_intent(name: str) -> bool:
+    normalized = _normalize_text(name)
+    if not normalized:
+        return False
+    tokens = set(normalized.split())
+    return any(token in tokens for token in _BOUNDARY_INTENT_TOKENS)
+
+
+def _is_boundary_like(payload: dict[str, Any]) -> bool:
+    normalized_type = _normalize_text(payload.get("type"))
+    normalized_addresstype = _normalize_text(payload.get("addresstype"))
+    normalized_category = _normalize_text(payload.get("category") or payload.get("class"))
+    admin_level = _extract_admin_level(payload)
+    if admin_level is not None:
+        return True
+    if normalized_type in _BOUNDARY_LIKE_TYPES or normalized_addresstype in _BOUNDARY_LIKE_TYPES:
+        return True
+    return normalized_category == "boundary"
+
+
+def _is_point_like(payload: dict[str, Any]) -> bool:
+    normalized_type = _normalize_text(payload.get("type"))
+    normalized_addresstype = _normalize_text(payload.get("addresstype"))
+    if normalized_type in _POINT_LIKE_TYPES:
+        return True
+    if normalized_addresstype in _POINT_LIKE_TYPES:
+        return True
+    return not _is_boundary_like(payload)
+
+
+def _candidate_payload(payload: dict[str, Any], *, role: str, source_query: str) -> dict[str, Any] | None:
+    osm_type = _normalize_text(payload.get("osm_type"))
+    osm_id = _as_int_or_none(payload.get("osm_id"))
+    latitude = _as_float_or_none(payload.get("lat"))
+    longitude = _as_float_or_none(payload.get("lon"))
+    if latitude is None or longitude is None:
+        return None
+    return {
+        "role": role,
+        "source_query": source_query,
+        "display_name": str(payload.get("display_name") or "").strip() or None,
+        "osm_type": osm_type or None,
+        "osm_id": osm_id,
+        "osm_class": _normalize_text(payload.get("class") or payload.get("category")) or None,
+        "osm_place_type": _normalize_text(payload.get("type")) or None,
+        "osm_addresstype": _normalize_text(payload.get("addresstype")) or None,
+        "osm_admin_level": _extract_admin_level(payload),
+        "osm_place_rank": _as_int_or_none(payload.get("place_rank")),
+        "latitude": latitude,
+        "longitude": longitude,
+        "boundingbox": _normalize_boundingbox(payload.get("boundingbox")),
+    }
+
+
+def _build_candidate_set(*, primary_query: str, payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str | None, int | None, str]] = set()
+    for index, payload in enumerate(payloads):
+        role = "boundary" if _is_boundary_like(payload) else "point"
+        if index == 0 and role != "boundary":
+            role = "point"
+        candidate = _candidate_payload(payload, role=role, source_query=primary_query)
+        if candidate is None:
+            continue
+        key = (candidate.get("osm_type"), candidate.get("osm_id"), role)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+    return candidates
+
+
 def infer_location_rank(
     *,
     normalized_location: str | None = None,
@@ -134,6 +334,7 @@ def infer_location_rank(
     category: str | None,
     place_type: str | None,
     addresstype: str | None,
+    admin_level: int | None = None,
 ) -> str:
     normalized_category = _normalize_text(category)
     normalized_type = _normalize_text(place_type)
@@ -149,6 +350,17 @@ def infer_location_rank(
         "oceania",
         "australia",
     }
+
+    if admin_level is not None and admin_level > 0:
+        return f"admin_level_{admin_level}"
+
+    if (
+        normalized_type in {"national_park", "protected_area"}
+        or normalized_addresstype in {"national_park", "protected_area"}
+    ):
+        return "national_park"
+    if normalized_type in {"desert", "dune"} or normalized_addresstype in {"desert", "dune"}:
+        return "desert"
 
     if (
         normalized_type in _OCEAN_TOKENS
@@ -197,74 +409,77 @@ def geocode_location(
         len(query_variants),
     )
 
-    last_error: Exception | None = None
     for query in query_variants:
-        for attempt in range(1, max_retries + 1):
-            try:
-                _throttle_requests()
-                response = requests.get(
-                    endpoint,
-                    params={
-                        "q": query,
-                        "format": "jsonv2",
-                        "addressdetails": 1,
-                        "limit": 1,
-                    },
-                    headers={"User-Agent": user_agent},
-                    timeout=timeout_seconds,
-                )
-                if response.status_code == 429:
-                    retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
-                    backoff_seconds = retry_after if retry_after is not None else 2 ** (attempt - 1)
-                    logger.warning(
-                        "geocoder.nominatim_rate_limited name=%s query=%s attempt=%s backoff_seconds=%s",
-                        name,
-                        query,
-                        attempt,
-                        round(backoff_seconds, 2),
-                    )
-                    if attempt < max_retries:
-                        time.sleep(backoff_seconds)
-                        continue
-                response.raise_for_status()
-                payload = response.json()
-                if not payload:
-                    logger.info("geocoder.nominatim_not_found name=%s query=%s", name, query)
-                    break
-                normalized = normalize_geocoder_response(name, payload[0])
-                logger.info(
-                    "geocoder.nominatim_request_success name=%s query=%s precision=%s",
-                    name,
-                    query,
-                    normalized["precision"],
-                )
-                return normalized
-            except (requests.RequestException, KeyError, ValueError) as exc:
-                last_error = exc
-                if attempt == max_retries:
-                    break
-                backoff_seconds = 2 ** (attempt - 1)
-                logger.warning(
-                    "geocoder.nominatim_retry name=%s query=%s attempt=%s backoff_seconds=%s reason=%s",
-                    name,
-                    query,
-                    attempt,
-                    backoff_seconds,
-                    type(exc).__name__,
-                )
-                time.sleep(backoff_seconds)
+        payloads = _search_nominatim(
+            endpoint=endpoint,
+            user_agent=user_agent,
+            query=query,
+            limit=8,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+        )
+        if not payloads:
+            logger.info("geocoder.nominatim_not_found name=%s query=%s", name, query)
+            continue
+        top_payload = payloads[0]
+        boundary_intent = _detect_boundary_intent(name)
+        candidates = _build_candidate_set(primary_query=query, payloads=payloads)
+        if boundary_intent and _is_point_like(top_payload):
+            follow_up_payloads = _search_nominatim(
+                endpoint=endpoint,
+                user_agent=user_agent,
+                query=f"{query} boundary",
+                limit=8,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+            )
+            boundary_candidates = _build_candidate_set(
+                primary_query=f"{query} boundary",
+                payloads=[row for row in follow_up_payloads if _is_boundary_like(row)],
+            )
+            existing = {
+                (candidate.get("osm_type"), candidate.get("osm_id"), candidate.get("role"))
+                for candidate in candidates
+            }
+            for candidate in boundary_candidates:
+                key = (candidate.get("osm_type"), candidate.get("osm_id"), candidate.get("role"))
+                if key in existing:
+                    continue
+                existing.add(key)
+                candidates.append(candidate)
+        normalized = normalize_geocoder_response(
+            name,
+            top_payload,
+            boundary_intent=boundary_intent,
+            geocode_candidates=candidates,
+        )
+        logger.info(
+            "geocoder.nominatim_request_success name=%s query=%s precision=%s boundary_intent=%s candidates=%s",
+            name,
+            query,
+            normalized["precision"],
+            normalized["boundary_intent"],
+            len(normalized["geocode_candidates"]),
+        )
+        return normalized
 
     logger.error(
         "geocoder.nominatim_failed name=%s variants=%s max_retries=%s reason=%s",
         name,
         len(query_variants),
         max_retries,
-        type(last_error).__name__ if last_error else "not_found",
+        "not_found",
     )
     return None
 
 
-def normalize_geocoder_response(normalized_location: str, payload: dict[str, Any]) -> dict[str, Any]:
+def normalize_geocoder_response(
+    normalized_location: str,
+    payload: dict[str, Any],
+    *,
+    boundary_intent: bool = False,
+    geocode_candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     address = payload.get("address", {}) or {}
     city = address.get("city") or address.get("town") or address.get("village")
     region = (
@@ -279,6 +494,7 @@ def normalize_geocoder_response(normalized_location: str, payload: dict[str, Any
     category = payload.get("category") or payload.get("class")
     place_type = payload.get("type")
     addresstype = payload.get("addresstype")
+    admin_level = _extract_admin_level(payload)
     place_rank = _as_int_or_none(payload.get("place_rank"))
     boundingbox = _normalize_boundingbox(payload.get("boundingbox"))
 
@@ -301,14 +517,18 @@ def normalize_geocoder_response(normalized_location: str, payload: dict[str, Any
             category=str(category) if category is not None else None,
             place_type=str(place_type) if place_type is not None else None,
             addresstype=str(addresstype) if addresstype is not None else None,
+            admin_level=admin_level,
         ),
         "osm_type": str(osm_type) if osm_type is not None else None,
         "osm_id": osm_id,
         "osm_category": str(category) if category is not None else None,
         "osm_place_type": str(place_type) if place_type is not None else None,
         "osm_addresstype": str(addresstype) if addresstype is not None else None,
+        "osm_admin_level": admin_level,
         "osm_place_rank": place_rank,
         "osm_boundingbox": boundingbox,
+        "boundary_intent": bool(boundary_intent),
+        "geocode_candidates": list(geocode_candidates or []),
     }
 
 
@@ -320,3 +540,13 @@ def infer_precision(*, city: str | None, region: str | None, country: str | None
     if country:
         return "country"
     return "unknown"
+    if admin_level is not None and admin_level > 0:
+        return f"admin_level_{admin_level}"
+
+    if (
+        normalized_type in {"national_park", "protected_area"}
+        or normalized_addresstype in {"national_park", "protected_area"}
+    ):
+        return "national_park"
+    if normalized_type in {"desert", "dune"} or normalized_addresstype in {"desert", "dune"}:
+        return "desert"

@@ -315,22 +315,16 @@ function StartRunModal({ onClose, onSubmit, mode = "default" }) {
   const [document_url, setDocumentUrl] = useState("");
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
-  const [refreshGeoIdentity, setRefreshGeoIdentity] = useState(false);
-  const [refreshCanonicalDictionary, setRefreshCanonicalDictionary] = useState(false);
+  const [fullRefreshGeoInformation, setFullRefreshGeoInformation] = useState(false);
   const unprocessedMode = mode === "unprocessed";
-  const supportsRefreshGeoIdentity =
-    !unprocessedMode && (pipeline_type === "full_pipeline" || pipeline_type === "geocode_only");
-  const supportsCanonicalRefresh =
+  const supportsFullGeoRefresh =
     !unprocessedMode && (pipeline_type === "full_pipeline" || pipeline_type === "geocode_only");
 
   const submit = () => {
     const payload = { pipeline_type, target_scope, options: {} };
     if (unprocessedMode) payload.options.process_unprocessed_only = true;
-    if (supportsRefreshGeoIdentity && refreshGeoIdentity) {
-      payload.options.refresh_geo_identity = true;
-    }
-    if (supportsCanonicalRefresh) {
-      payload.options.refresh_canonical_dictionary = refreshCanonicalDictionary;
+    if (supportsFullGeoRefresh && fullRefreshGeoInformation) {
+      payload.options.full_refresh_geo_information = true;
     }
     if (target_scope === "single_document" && document_url) payload.document_url = document_url;
     if (target_scope === "document_range" && rangeStart && rangeEnd) {
@@ -371,24 +365,14 @@ function StartRunModal({ onClose, onSubmit, mode = "default" }) {
             <label>End<input value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} /></label>
           </div>
         ) : null}
-        {supportsRefreshGeoIdentity ? (
+        {supportsFullGeoRefresh ? (
           <label>
             <input
               type="checkbox"
-              checked={refreshGeoIdentity}
-              onChange={(e) => setRefreshGeoIdentity(e.target.checked)}
+              checked={fullRefreshGeoInformation}
+              onChange={(e) => setFullRefreshGeoInformation(e.target.checked)}
             />
-            Refresh missing geo identity (re-geocode cache rows without rank/OSM identity/bbox)
-          </label>
-        ) : null}
-        {supportsCanonicalRefresh ? (
-          <label>
-            <input
-              type="checkbox"
-              checked={refreshCanonicalDictionary}
-              onChange={(e) => setRefreshCanonicalDictionary(e.target.checked)}
-            />
-            Reload canonical dictionary before geocoding (from CANONICAL_DICTIONARY_INPUT)
+            Full refresh of geoinformation (re-geocode all cached geo rows from scratch)
           </label>
         ) : null}
         <div className="actions">

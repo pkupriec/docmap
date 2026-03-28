@@ -102,6 +102,47 @@ def test_infer_location_rank_ocean_matches_token_boundary() -> None:
     )
 
 
+def test_infer_location_rank_uses_admin_level_when_available() -> None:
+    assert (
+        infer_location_rank(
+            normalized_location="Kyiv Oblast, Ukraine",
+            city=None,
+            region="Kyiv Oblast",
+            country="Ukraine",
+            category="boundary",
+            place_type="administrative",
+            addresstype="state",
+            admin_level=4,
+        )
+        == "admin_level_4"
+    )
+
+
+def test_normalize_geocoder_response_includes_boundary_candidates() -> None:
+    payload = {
+        "lat": "35.0",
+        "lon": "139.0",
+        "address": {"country": "Japan"},
+        "osm_type": "relation",
+        "osm_id": "111",
+        "category": "boundary",
+        "type": "administrative",
+        "addresstype": "country",
+        "place_rank": "4",
+        "extratags": {"admin_level": "2"},
+        "boundingbox": ["34.0", "36.0", "138.0", "140.0"],
+    }
+    normalized = normalize_geocoder_response(
+        "Japan",
+        payload,
+        boundary_intent=True,
+        geocode_candidates=[{"role": "point"}, {"role": "boundary"}],
+    )
+    assert normalized["boundary_intent"] is True
+    assert normalized["osm_admin_level"] == 2
+    assert len(normalized["geocode_candidates"]) == 2
+
+
 def test_build_query_variants_includes_city_country_fallback() -> None:
     variants = nominatim_client._build_query_variants("New York Stock Exchange, New York, United States")
     assert variants[0] == "New York Stock Exchange, New York, United States"

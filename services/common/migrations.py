@@ -165,6 +165,12 @@ def _apply_runtime_schema_patches() -> None:
             cur.execute(
                 """
                 ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS osm_admin_level INTEGER
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
                 ADD COLUMN IF NOT EXISTS osm_place_rank INTEGER
                 """
             )
@@ -172,6 +178,18 @@ def _apply_runtime_schema_patches() -> None:
                 """
                 ALTER TABLE IF EXISTS geo_locations
                 ADD COLUMN IF NOT EXISTS osm_boundingbox JSONB
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS boundary_intent BOOLEAN NOT NULL DEFAULT FALSE
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS geocode_candidates JSONB
                 """
             )
             cur.execute(

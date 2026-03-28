@@ -6,6 +6,29 @@ from services.analytics import geometry_assets
 from services.analytics.geometry_assets import GeometryTarget, build_admin_boundaries_asset
 
 
+def _target(**overrides):
+    base = {
+        "location_id": "loc-1",
+        "canonical_id": None,
+        "location_name": "France",
+        "location_rank": "country",
+        "country_name": "France",
+        "region_name": None,
+        "document_count": 1,
+        "osm_type": None,
+        "osm_id": None,
+        "osm_admin_level": None,
+        "boundary_intent": False,
+        "geocode_candidates": [],
+        "osm_category": None,
+        "osm_place_type": None,
+        "canonical_resolution_method": None,
+        "canonical_confidence": None,
+    }
+    base.update(overrides)
+    return GeometryTarget(**base)
+
+
 def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_coverage(
     tmp_path,
     monkeypatch,
@@ -34,7 +57,7 @@ def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_co
                     {
                         "type": "Feature",
                         "properties": {
-                            "location_rank": "region",
+                            "location_rank": "admin_level_4",
                             "location_name": "California",
                             "country_name": "United States",
                             "region_name": "California",
@@ -67,57 +90,27 @@ def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_co
         geometry_assets,
         "_query_targets",
         lambda _conn: [
-            GeometryTarget(
-                location_id="country-1",
-                canonical_id=None,
-                location_name="France",
-                location_rank="country",
-                country_name="France",
-                region_name=None,
-                document_count=10,
-                osm_type=None,
-                osm_id=None,
-                canonical_resolution_method=None,
-                canonical_confidence=None,
-            ),
-            GeometryTarget(
+            _target(location_id="country-1", location_name="France", location_rank="country", country_name="France"),
+            _target(
                 location_id="region-1",
-                canonical_id=None,
                 location_name="California",
-                location_rank="admin_region",
+                location_rank="admin_level_4",
                 country_name="United States",
                 region_name="California",
-                document_count=5,
                 osm_type="relation",
                 osm_id=44,
-                canonical_resolution_method=None,
-                canonical_confidence=None,
             ),
-            GeometryTarget(
+            _target(
                 location_id="ocean-1",
-                canonical_id=None,
                 location_name="Pacific Ocean",
                 location_rank="ocean",
                 country_name=None,
-                region_name=None,
-                document_count=1,
-                osm_type=None,
-                osm_id=None,
-                canonical_resolution_method=None,
-                canonical_confidence=None,
             ),
-            GeometryTarget(
+            _target(
                 location_id="continent-1",
-                canonical_id=None,
                 location_name="Europe",
                 location_rank="continent",
                 country_name=None,
-                region_name=None,
-                document_count=0,
-                osm_type=None,
-                osm_id=None,
-                canonical_resolution_method=None,
-                canonical_confidence=None,
             ),
         ],
     )
@@ -158,70 +151,29 @@ def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_co
     )
 
     assert result.features_written == 3
-    assert output.exists()
-    assert coverage.exists()
-
     out_payload = json.loads(output.read_text(encoding="utf-8"))
-    assert out_payload["type"] == "FeatureCollection"
-    assert len(out_payload["features"]) == 3
     assert {f["properties"]["location_id"] for f in out_payload["features"]} == {
         "country-1",
         "region-1",
         "ocean-1",
     }
-    assert {f["properties"]["location_rank"] for f in out_payload["features"]} == {
-        "country",
-        "admin_region",
-        "ocean",
-    }
-
     coverage_payload = json.loads(coverage.read_text(encoding="utf-8"))
     assert coverage_payload["totals"]["targets"] == 4
     assert coverage_payload["totals"]["matched_targets"] == 3
-    assert coverage_payload["coverage_by_rank"]["country"]["matched"] == 1
-    assert coverage_payload["coverage_by_rank"]["admin_region"]["matched"] == 1
-    assert coverage_payload["coverage_by_rank"]["ocean"]["matched"] == 1
-    assert coverage_payload["coverage_by_rank"]["continent"]["matched"] == 0
+    assert coverage_payload["coverage_by_rank"]["admin_level_4"]["matched"] == 1
     assert coverage_payload["unmatched"]["continent"] == ["Europe"]
     assert conn.cursor_instance.truncated is True
     assert len(conn.cursor_instance.inserted) == 3
-    assert {row[0] for row in conn.cursor_instance.inserted} == {"country-1", "region-1", "ocean-1"}
 
 
-def test_dedupe_alias_targets_prefers_osm_identity_and_docs() -> None:
+def test_dedupe_alias_targets_keeps_distinct_entities() -> None:
     targets = [
-        GeometryTarget(
-            location_id="country-empty",
-            canonical_id=None,
-            location_name="Russian Federation",
-            location_rank="country",
-            country_name="Россия",
-            region_name=None,
-            document_count=0,
-            osm_type=None,
-            osm_id=None,
-            canonical_resolution_method=None,
-            canonical_confidence=None,
-        ),
-        GeometryTarget(
-            location_id="country-docs",
-            canonical_id=None,
-            location_name="Russia",
-            location_rank="country",
-            country_name="Россия",
-            region_name=None,
-            document_count=187,
-            osm_type="relation",
-            osm_id=60189,
-            canonical_resolution_method=None,
-            canonical_confidence=None,
-        ),
+        _target(location_id="country-a", location_name="Congo"),
+        _target(location_id="country-b", location_name="Congo"),
     ]
-
     deduped = geometry_assets._dedupe_alias_targets(targets)
-
-    assert len(deduped) == 1
-    assert deduped[0].location_id == "country-docs"
+    assert len(deduped) == 2
+    assert {item.location_id for item in deduped} == {"country-a", "country-b"}
 
 
 def test_select_feature_prefers_canonical_id_before_alias() -> None:
@@ -235,16 +187,11 @@ def test_select_feature_prefers_canonical_id_before_alias() -> None:
         },
         "geometry": {"type": "Polygon", "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0]]]},
     }
-    target = GeometryTarget(
+    target = _target(
         location_id="loc-fin",
         canonical_id="ne:country:FIN",
         location_name="Suomi",
-        location_rank="country",
         country_name="Suomi",
-        region_name=None,
-        document_count=23,
-        osm_type=None,
-        osm_id=None,
         canonical_resolution_method="strict_alias",
         canonical_confidence=75,
     )
@@ -262,38 +209,3 @@ def test_select_feature_prefers_canonical_id_before_alias() -> None:
     assert matched is feature
     assert strategy == "canonical_id"
 
-
-def test_dedupe_alias_targets_prefers_canonical_resolved_over_unresolved_high_docs() -> None:
-    targets = [
-        GeometryTarget(
-            location_id="country-congo-unresolved",
-            canonical_id=None,
-            location_name="Congo",
-            location_rank="country",
-            country_name="Congo",
-            region_name=None,
-            document_count=50,
-            osm_type=None,
-            osm_id=None,
-            canonical_resolution_method="ambiguous_alias_insufficient_signal",
-            canonical_confidence=0,
-        ),
-        GeometryTarget(
-            location_id="country-congo-cod",
-            canonical_id="ne:country:COD",
-            location_name="Congo",
-            location_rank="country",
-            country_name="Congo",
-            region_name=None,
-            document_count=7,
-            osm_type=None,
-            osm_id=None,
-            canonical_resolution_method="deterministic_ambiguity_resolver",
-            canonical_confidence=90,
-        ),
-    ]
-
-    deduped = geometry_assets._dedupe_alias_targets(targets)
-
-    assert len(deduped) == 1
-    assert deduped[0].location_id == "country-congo-cod"

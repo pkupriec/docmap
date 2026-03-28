@@ -29,6 +29,10 @@ def _normalize_place_type(value: str | None) -> str:
     raw = (value or "").strip().lower()
     if raw == "region":
         return "admin_region"
+    if raw.startswith("admin_level_"):
+        return raw
+    if raw in {"national_park", "desert"}:
+        return raw
     if raw in {"city", "admin_region", "country", "continent", "ocean"}:
         return raw
     return "unknown"
@@ -142,7 +146,11 @@ def build_seed_dictionary(*, source_path: Path, output_path: Path, source: str =
             seen.add(key)
 
         country_canonical_id = None
-        if row["place_type"] == "admin_region" and row["country_name"]:
+        if (
+            row["place_type"] == "admin_region"
+            or row["place_type"].startswith("admin_level_")
+            or row["place_type"] in {"national_park", "desert"}
+        ) and row["country_name"]:
             country_canonical_id = country_alias_index.get(_normalize_text(row["country_name"]))
 
         concordances = list(row["concordances"])
@@ -168,4 +176,3 @@ def build_seed_dictionary(*, source_path: Path, output_path: Path, source: str =
         "aliases": alias_count,
         "concordances": concordance_count,
     }
-

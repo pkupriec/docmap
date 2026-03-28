@@ -33,8 +33,9 @@ Base path: `/api`
 
 Current orchestrator-recognized options include:
 - `process_unprocessed_only`
-- `refresh_canonical_dictionary`
-- `refresh_geo_identity`
+- `refresh_canonical_dictionary` (defaults to `true` for geocode/full runs)
+- `refresh_geo_identity` (defaults to `true` for geocode/full runs)
+- `full_refresh_geo_information` (forces full cache re-geocode from scratch)
 
 ## Streaming
 

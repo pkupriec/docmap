@@ -239,17 +239,16 @@ class PresentationRepository:
 
         if scope_rank_normalized == "city":
             rank_filter = ("city",)
-        elif scope_rank_normalized == "admin_region":
-            rank_filter = ("admin_region", "region", "city")
-        elif scope_rank_normalized == "country":
-            rank_filter = ("country", "admin_region", "region", "city")
-        elif scope_rank_normalized == "continent":
-            rank_filter = ("continent", "country", "admin_region", "region", "city")
         else:
-            rank_filter = (scope_rank_normalized,)
+            rank_filter = ()
 
-        rank_filter_sql = ", ".join(["%s"] * len(rank_filter))
+        rank_filter_sql = ", ".join(["%s"] * len(rank_filter)) if rank_filter else ""
         params: list[Any] = [location_id, *rank_filter]
+        rank_clause = (
+            f"AND COALESCE(NULLIF(LOWER(bl.location_rank), ''), 'unknown') IN ({rank_filter_sql})"
+            if rank_filter
+            else ""
+        )
 
         scope_sql = f"""
             WITH scope_locations AS (
@@ -259,7 +258,7 @@ class PresentationRepository:
                 JOIN bi_locations bl ON bl.location_id = h.descendant_location_id
                 WHERE
                     h.ancestor_location_id = %s
-                    AND COALESCE(NULLIF(LOWER(bl.location_rank), ''), 'unknown') IN ({rank_filter_sql})
+                    {rank_clause}
             ),
             scope_counts AS (
                 SELECT COUNT(DISTINCT sl.location_id) AS location_count
@@ -322,7 +321,7 @@ class PresentationRepository:
                         JOIN bi_locations bl ON bl.location_id = h.descendant_location_id
                         WHERE
                             h.ancestor_location_id = %s
-                            AND COALESCE(NULLIF(LOWER(bl.location_rank), ''), 'unknown') IN ({rank_filter_sql})
+                            {rank_clause}
                     )
                     SELECT COUNT(DISTINCT sl.location_id) AS location_count
                     FROM scope_locations sl
@@ -341,7 +340,7 @@ class PresentationRepository:
                         JOIN bi_locations bl ON bl.location_id = h.descendant_location_id
                         WHERE
                             h.ancestor_location_id = %s
-                            AND COALESCE(NULLIF(LOWER(bl.location_rank), ''), 'unknown') IN ({rank_filter_sql})
+                            {rank_clause}
                     ),
                     scoped_docs AS (
                         SELECT DISTINCT bdl.document_id

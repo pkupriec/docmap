@@ -26,6 +26,8 @@ class GeoLocationCacheEntry:
     osm_id: int | None
     osm_boundingbox: Any | None
     canonical_id: str | None = None
+    geocode_candidates: Any | None = None
+    boundary_intent: bool = False
 
 
 SAFE_ALIAS_TYPES = ("exact_name", "language_variant")
@@ -62,8 +64,14 @@ def _normalize_alias_text(value: str | None) -> str:
 
 def _normalize_place_type(value: str | None) -> str:
     normalized = (value or "").strip().lower()
+    if normalized.startswith("admin_level_"):
+        return "admin_region"
     if normalized == "region":
         return "admin_region"
+    if normalized == "national_park":
+        return "park"
+    if normalized == "desert":
+        return "desert"
     return normalized or "unknown"
 
 
@@ -463,7 +471,7 @@ def get_geo_location_cache_entry(conn: Connection, normalized_location: str) -> 
         cur.execute(
             """
             SELECT id, location_rank, osm_type, osm_id, osm_boundingbox
-                 , canonical_id
+                 , canonical_id, geocode_candidates, boundary_intent
             FROM geo_locations
             WHERE normalized_location = %s
             """,
@@ -481,6 +489,8 @@ def get_geo_location_cache_entry(conn: Connection, normalized_location: str) -> 
             osm_id=osm_id,
             osm_boundingbox=row[4],
             canonical_id=str(row[5]).strip() if row[5] is not None else None,
+            geocode_candidates=row[6],
+            boundary_intent=bool(row[7]) if row[7] is not None else False,
         )
 
 
@@ -505,8 +515,15 @@ def _geo_location_payload(location: dict[str, Any]) -> dict[str, Any]:
         "osm_category": location.get("osm_category"),
         "osm_place_type": location.get("osm_place_type"),
         "osm_addresstype": location.get("osm_addresstype"),
+        "osm_admin_level": location.get("osm_admin_level"),
         "osm_place_rank": location.get("osm_place_rank"),
         "osm_boundingbox_json": json.dumps(boundingbox) if boundingbox is not None else None,
+        "boundary_intent": bool(location.get("boundary_intent", False)),
+        "geocode_candidates_json": (
+            json.dumps(location.get("geocode_candidates"))
+            if location.get("geocode_candidates") is not None
+            else None
+        ),
         "canonical_id": location.get("canonical_id"),
         "canonical_resolution_method": location.get("canonical_resolution_method"),
         "canonical_confidence": location.get("canonical_confidence"),
@@ -559,8 +576,11 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                         osm_category = %s,
                         osm_place_type = %s,
                         osm_addresstype = %s,
+                        osm_admin_level = %s,
                         osm_place_rank = %s,
                         osm_boundingbox = %s::jsonb,
+                        boundary_intent = %s,
+                        geocode_candidates = %s::jsonb,
                         canonical_id = %s,
                         canonical_resolution_method = %s,
                         canonical_confidence = %s,
@@ -580,8 +600,11 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                         payload["osm_category"],
                         payload["osm_place_type"],
                         payload["osm_addresstype"],
+                        payload["osm_admin_level"],
                         payload["osm_place_rank"],
                         payload["osm_boundingbox_json"],
+                        payload["boundary_intent"],
+                        payload["geocode_candidates_json"],
                         payload["canonical_id"],
                         payload["canonical_resolution_method"],
                         payload["canonical_confidence"],
@@ -610,8 +633,11 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                     osm_category,
                     osm_place_type,
                     osm_addresstype,
+                    osm_admin_level,
                     osm_place_rank,
                     osm_boundingbox,
+                    boundary_intent,
+                    geocode_candidates,
                     canonical_id,
                     canonical_resolution_method,
                     canonical_confidence,
@@ -620,7 +646,7 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                 )
             VALUES
                 (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s, %s, %s, %s::jsonb,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
                 )
             ON CONFLICT (normalized_location) DO UPDATE
@@ -636,8 +662,11 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                 osm_category = EXCLUDED.osm_category,
                 osm_place_type = EXCLUDED.osm_place_type,
                 osm_addresstype = EXCLUDED.osm_addresstype,
+                osm_admin_level = EXCLUDED.osm_admin_level,
                 osm_place_rank = EXCLUDED.osm_place_rank,
                 osm_boundingbox = EXCLUDED.osm_boundingbox,
+                boundary_intent = EXCLUDED.boundary_intent,
+                geocode_candidates = EXCLUDED.geocode_candidates,
                 canonical_id = EXCLUDED.canonical_id,
                 canonical_resolution_method = EXCLUDED.canonical_resolution_method,
                 canonical_confidence = EXCLUDED.canonical_confidence,
@@ -659,8 +688,11 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                 payload["osm_category"],
                 payload["osm_place_type"],
                 payload["osm_addresstype"],
+                payload["osm_admin_level"],
                 payload["osm_place_rank"],
                 payload["osm_boundingbox_json"],
+                payload["boundary_intent"],
+                payload["geocode_candidates_json"],
                 payload["canonical_id"],
                 payload["canonical_resolution_method"],
                 payload["canonical_confidence"],

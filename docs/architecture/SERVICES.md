@@ -25,11 +25,15 @@ Geocoder (`services/geocoder/*`):
 - mention normalization
 - Nominatim resolution and cache update
 - canonical identity mapping and ambiguity resolution
+- deterministic boundary-intent detection and dual-candidate persistence (point + boundary when applicable)
 - document-location linking
 
 Analytics (`services/analytics/*`):
 - deterministic rebuild of BI projections
 - boundaries materialization into `bi_admin_boundaries`
+- geometry selection from identity-first matching with geocoder candidate support
+- recursive hierarchy closure and descendant aggregation for large-geometry interactions
+- generalized spatial intersection links for polygon geometries across countries/admin levels
 - optional BigQuery export
 
 Control (`services/control/*`):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -12,6 +13,7 @@ from services.analytics.geometry_assets import build_admin_boundaries_asset
 from services.analytics.scripts.build_admin_boundaries_source import build_source_dataset
 
 logger = logging.getLogger(__name__)
+_ADMIN_LEVEL_RE = re.compile(r"^admin_level_(\d+)$")
 
 AnalyticsStepCallback = Callable[[str, int], None]
 
@@ -86,183 +88,179 @@ def build_bi_documents(conn: Connection) -> int:
 
 
 def build_bi_locations(conn: Connection) -> int:
+    def _parse_bbox(value):
+        if not isinstance(value, list) or len(value) != 4:
+            return None
+        try:
+            south, north, west, east = [float(item) for item in value]
+        except (TypeError, ValueError):
+            return None
+        return (south, north, west, east)
+
+    def _bbox_contains_point(bbox, lat, lon):
+        if bbox is None or lat is None or lon is None:
+            return False
+        south, north, west, east = bbox
+        return south <= lat <= north and west <= lon <= east
+
+    def _admin_level(rank: str) -> int | None:
+        match = _ADMIN_LEVEL_RE.match(rank or "")
+        if match is None:
+            return None
+        return int(match.group(1))
+
     with conn.cursor() as cur:
         cur.execute("TRUNCATE TABLE bi_locations")
         cur.execute(
             """
-            WITH typed_locations AS (
-                SELECT
-                    gl.id,
-                    gl.normalized_location,
-                    gl.country,
-                    gl.region,
-                    gl.city,
-                    NULLIF(
-                        BTRIM(
-                            COALESCE(
-                                (regexp_match(gl.normalized_location, ',\\s*([^,]+),\\s*[^,]+$'))[1],
-                                ''
-                            )
-                        ),
-                        ''
-                    ) AS region_hint,
-                    NULLIF(
-                        BTRIM(
-                            COALESCE(
-                                (regexp_match(gl.normalized_location, '([^,]+)$'))[1],
-                                ''
-                            )
-                        ),
-                        ''
-                    ) AS country_hint,
-                    gl.latitude,
-                    gl.longitude,
-                    gl.precision,
-                    COALESCE(
-                        NULLIF(gl.location_rank, ''),
-                        CASE
-                            WHEN LOWER(gl.normalized_location) IN (
-                                'africa',
-                                'antarctica',
-                                'asia',
-                                'europe',
-                                'north america',
-                                'south america',
-                                'oceania',
-                                'australia'
-                            ) THEN 'continent'
-                            WHEN LOWER(gl.normalized_location) LIKE '%ocean%'
-                                OR LOWER(gl.normalized_location) LIKE '%sea%'
-                                OR LOWER(gl.normalized_location) LIKE '%gulf%'
-                                OR LOWER(gl.normalized_location) LIKE '%strait%'
-                                OR LOWER(gl.normalized_location) LIKE '%channel%'
-                                OR LOWER(gl.normalized_location) LIKE '%bay%'
-                            THEN 'ocean'
-                            WHEN gl.city IS NOT NULL THEN 'city'
-                            WHEN gl.region IS NOT NULL THEN 'admin_region'
-                            WHEN gl.country IS NOT NULL THEN 'country'
-                            ELSE 'unknown'
-                        END
-                    ) AS location_rank
-                FROM geo_locations gl
-            )
-            INSERT INTO bi_locations
-                (
-                    location_id,
-                    normalized_location,
-                    country,
-                    region,
-                    city,
-                    latitude,
-                    longitude,
-                    precision,
-                    location_rank,
-                    parent_location_id,
-                    document_count
-                )
             SELECT
-                tl.id AS location_id,
-                tl.normalized_location,
-                tl.country,
-                tl.region,
-                tl.city,
-                tl.latitude,
-                tl.longitude,
-                tl.precision,
-                tl.location_rank,
-                CASE
-                    WHEN tl.location_rank = 'city' THEN
-                        COALESCE(
-                            (
-                                SELECT parent.id
-                                FROM typed_locations parent
-                                WHERE
-                                    parent.location_rank = 'admin_region'
-                                    AND parent.city IS NULL
-                                    AND COALESCE(tl.region, tl.region_hint) IS NOT NULL
-                                    AND (
-                                        parent.region = COALESCE(tl.region, tl.region_hint)
-                                        OR LOWER(parent.normalized_location) = LOWER(COALESCE(tl.region_hint, tl.region))
-                                    )
-                                    AND (
-                                        (parent.country = tl.country)
-                                        OR (
-                                            tl.country_hint IS NOT NULL
-                                            AND LOWER(parent.normalized_location) = LOWER(tl.country_hint)
-                                        )
-                                        OR (parent.country IS NULL AND tl.country IS NULL)
-                                    )
-                                ORDER BY
-                                    CASE
-                                        WHEN LOWER(parent.normalized_location) = LOWER(COALESCE(tl.region_hint, tl.region)) THEN 0
-                                        ELSE 1
-                                    END,
-                                    parent.normalized_location,
-                                    parent.id
-                                LIMIT 1
-                            ),
-                            (
-                                SELECT parent.id
-                                FROM typed_locations parent
-                                WHERE
-                                    parent.location_rank = 'country'
-                                    AND parent.city IS NULL
-                                    AND parent.region IS NULL
-                                    AND COALESCE(tl.country, tl.country_hint) IS NOT NULL
-                                    AND (
-                                        parent.country = tl.country
-                                        OR (
-                                            tl.country_hint IS NOT NULL
-                                            AND LOWER(parent.normalized_location) = LOWER(tl.country_hint)
-                                        )
-                                    )
-                                ORDER BY
-                                    CASE
-                                        WHEN LOWER(parent.normalized_location) = LOWER(COALESCE(tl.country_hint, tl.country)) THEN 0
-                                        ELSE 1
-                                    END,
-                                    parent.normalized_location,
-                                    parent.id
-                                LIMIT 1
-                            )
-                        )
-                    WHEN tl.location_rank = 'admin_region' THEN
-                        (
-                            SELECT parent.id
-                            FROM typed_locations parent
-                            WHERE
-                                parent.location_rank = 'country'
-                                AND parent.city IS NULL
-                                AND parent.region IS NULL
-                                AND COALESCE(tl.country, tl.country_hint) IS NOT NULL
-                                AND (
-                                    parent.country = tl.country
-                                    OR (
-                                        tl.country_hint IS NOT NULL
-                                        AND LOWER(parent.normalized_location) = LOWER(tl.country_hint)
-                                    )
-                                )
-                            ORDER BY
-                                CASE
-                                    WHEN LOWER(parent.normalized_location) = LOWER(COALESCE(tl.country_hint, tl.country)) THEN 0
-                                    ELSE 1
-                                END,
-                                parent.normalized_location,
-                                parent.id
-                            LIMIT 1
-                        )
-                    ELSE NULL
-                END AS parent_location_id,
+                gl.id,
+                gl.normalized_location,
+                gl.country,
+                gl.region,
+                gl.city,
+                gl.latitude,
+                gl.longitude,
+                gl.precision,
+                COALESCE(NULLIF(gl.location_rank, ''), 'unknown') AS location_rank,
+                gl.osm_boundingbox,
                 COALESCE(docs.document_count, 0) AS document_count
-            FROM typed_locations tl
+            FROM geo_locations gl
             LEFT JOIN (
                 SELECT location_id, COUNT(DISTINCT document_id) AS document_count
                 FROM document_locations
                 GROUP BY location_id
-            ) docs ON docs.location_id = tl.id
+            ) docs ON docs.location_id = gl.id
+            ORDER BY gl.id ASC
             """
         )
-        return cur.rowcount
+        rows = cur.fetchall()
+
+        nodes: list[dict[str, object]] = []
+        for row in rows:
+            rank_raw = str(row[8] or "unknown").strip().lower()
+            if rank_raw == "region":
+                rank_raw = "admin_region"
+            bbox = _parse_bbox(row[9])
+            node = {
+                "location_id": row[0],
+                "normalized_location": row[1],
+                "country": row[2],
+                "region": row[3],
+                "city": row[4],
+                "latitude": row[5],
+                "longitude": row[6],
+                "precision": row[7],
+                "location_rank": rank_raw,
+                "bbox": bbox,
+                "document_count": int(row[10] or 0),
+            }
+            nodes.append(node)
+
+        by_country: dict[str, list[dict[str, object]]] = {}
+        by_id: dict[object, dict[str, object]] = {}
+        for node in nodes:
+            by_id[node["location_id"]] = node
+            country = str(node.get("country") or "").strip().lower()
+            by_country.setdefault(country, []).append(node)
+
+        def _parent_for(node: dict[str, object]) -> object | None:
+            rank = str(node.get("location_rank") or "unknown")
+            country = str(node.get("country") or "").strip().lower()
+            lat = node.get("latitude")
+            lon = node.get("longitude")
+            group = by_country.get(country, [])
+            if rank == "city":
+                admin_candidates = [
+                    item
+                    for item in group
+                    if (
+                        str(item.get("location_rank") or "").startswith("admin_level_")
+                        or str(item.get("location_rank") or "") == "admin_region"
+                    )
+                    and item.get("location_id") != node.get("location_id")
+                    and _bbox_contains_point(item.get("bbox"), lat, lon)
+                ]
+                admin_candidates.sort(
+                    key=lambda item: (
+                        -int(_admin_level(str(item.get("location_rank"))) or 0),
+                        str(item.get("location_id")),
+                    )
+                )
+                if admin_candidates:
+                    return admin_candidates[0].get("location_id")
+
+            level = _admin_level(rank)
+            if level is not None:
+                parent_admin = [
+                    item
+                    for item in group
+                    if item.get("location_id") != node.get("location_id")
+                    and _admin_level(str(item.get("location_rank") or "")) is not None
+                    and int(_admin_level(str(item.get("location_rank") or "")) or 0) < level
+                    and _bbox_contains_point(item.get("bbox"), lat, lon)
+                ]
+                parent_admin.sort(
+                    key=lambda item: (
+                        -int(_admin_level(str(item.get("location_rank") or "")) or 0),
+                        str(item.get("location_id")),
+                    )
+                )
+                if parent_admin:
+                    return parent_admin[0].get("location_id")
+
+            country_candidates = [
+                item
+                for item in group
+                if item.get("location_id") != node.get("location_id")
+                and str(item.get("location_rank") or "") == "country"
+            ]
+            if country_candidates:
+                country_candidates.sort(key=lambda item: str(item.get("location_id")))
+                return country_candidates[0].get("location_id")
+            return None
+
+        insert_rows = []
+        for node in nodes:
+            insert_rows.append(
+                (
+                    node["location_id"],
+                    node["normalized_location"],
+                    node["country"],
+                    node["region"],
+                    node["city"],
+                    node["latitude"],
+                    node["longitude"],
+                    node["precision"],
+                    node["location_rank"],
+                    _parent_for(node),
+                    node["document_count"],
+                )
+            )
+
+        if insert_rows:
+            cur.executemany(
+                """
+                INSERT INTO bi_locations
+                    (
+                        location_id,
+                        normalized_location,
+                        country,
+                        region,
+                        city,
+                        latitude,
+                        longitude,
+                        precision,
+                        location_rank,
+                        parent_location_id,
+                        document_count
+                    )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                insert_rows,
+            )
+            return len(insert_rows)
+        return 0
 
 
 def build_bi_document_locations(conn: Connection) -> int:
@@ -301,7 +299,7 @@ def build_bi_document_locations(conn: Connection) -> int:
                 WHERE
                     parent.parent_location_id IS NOT NULL
                     AND parent.parent_location_id <> e.location_id
-                    AND e.depth < 8
+                    AND e.depth < 32
             ),
             rolled AS (
                 SELECT DISTINCT
@@ -350,7 +348,10 @@ def build_bi_location_hierarchy(conn: Connection) -> int:
                     c.depth + 1 AS depth
                 FROM chain c
                 JOIN bi_locations parent ON parent.location_id = c.ancestor_location_id
-                WHERE parent.parent_location_id IS NOT NULL
+                WHERE
+                    parent.parent_location_id IS NOT NULL
+                    AND parent.parent_location_id <> c.descendant_location_id
+                    AND c.depth < 64
             ),
             dedup AS (
                 SELECT
@@ -397,6 +398,47 @@ def build_bi_location_hierarchy(conn: Connection) -> int:
                 FROM continent_country ce
                 JOIN dedup d ON d.ancestor_location_id = ce.country_location_id
             ),
+            boundary_nodes AS (
+                SELECT
+                    bab.location_id,
+                    COALESCE(NULLIF(LOWER(bl.location_rank), ''), 'unknown') AS location_rank,
+                    ST_SetSRID(ST_GeomFromGeoJSON((bab.feature_json -> 'geometry')::text), 4326) AS geom
+                FROM bi_admin_boundaries bab
+                JOIN bi_locations bl ON bl.location_id = bab.location_id
+            ),
+            spatial_admin_seed AS (
+                SELECT DISTINCT
+                    ancestor.location_id AS ancestor_location_id,
+                    descendant.location_id AS descendant_location_id,
+                    1 AS depth
+                FROM boundary_nodes ancestor
+                JOIN boundary_nodes descendant
+                    ON descendant.location_id <> ancestor.location_id
+                    AND (
+                        descendant.location_rank = 'country'
+                        OR descendant.location_rank = 'admin_region'
+                        OR descendant.location_rank LIKE 'admin_level_%'
+                    )
+                WHERE
+                    ST_Intersects(ancestor.geom, descendant.geom)
+                    AND ST_Area(ST_Intersection(ancestor.geom, descendant.geom)) > 0
+            ),
+            spatial_admin_expanded AS (
+                SELECT
+                    sas.ancestor_location_id,
+                    sas.descendant_location_id,
+                    sas.depth
+                FROM spatial_admin_seed sas
+
+                UNION ALL
+
+                SELECT
+                    sae.ancestor_location_id,
+                    d.descendant_location_id,
+                    sae.depth + d.depth AS depth
+                FROM spatial_admin_seed sae
+                JOIN dedup d ON d.ancestor_location_id = sae.descendant_location_id
+            ),
             all_links AS (
                 SELECT
                     d.ancestor_location_id,
@@ -411,6 +453,14 @@ def build_bi_location_hierarchy(conn: Connection) -> int:
                     ce.descendant_location_id,
                     ce.depth
                 FROM continent_expanded ce
+
+                UNION ALL
+
+                SELECT
+                    sae.ancestor_location_id,
+                    sae.descendant_location_id,
+                    sae.depth
+                FROM spatial_admin_expanded sae
             ),
             all_dedup AS (
                 SELECT

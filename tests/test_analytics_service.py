@@ -113,6 +113,11 @@ def test_build_bi_location_hierarchy_includes_continent_rollups() -> None:
     assert any("TRUNCATE TABLE bi_location_hierarchy" in sql for sql in conn.cursor_instance.executed_sql)
     insert_sql = next(sql for sql in conn.cursor_instance.executed_sql if "INSERT INTO bi_location_hierarchy" in sql)
     assert "continent_country AS (" in insert_sql
+    assert "boundary_nodes AS (" in insert_sql
+    assert "spatial_admin_seed AS (" in insert_sql
+    assert "descendant.location_rank LIKE 'admin_level_%'" in insert_sql
+    assert "spatial_admin_expanded AS (" in insert_sql
     assert "ST_Intersects(" in insert_sql
+    assert "ST_Area(ST_Intersection" in insert_sql
     assert "ST_GeomFromGeoJSON" in insert_sql
     assert "all_dedup AS (" in insert_sql

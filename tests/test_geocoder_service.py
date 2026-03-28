@@ -78,6 +78,36 @@ def test_process_single_mention_refreshes_missing_identity(monkeypatch) -> None:
     assert status == "geocoded_and_linked"
 
 
+def test_process_single_mention_force_full_refresh_regeocodes_cache(monkeypatch) -> None:
+    mention = PendingMention(
+        mention_id="m1",
+        document_id="d1",
+        normalized_location="Kyoto, Japan",
+    )
+    monkeypatch.setattr(
+        "services.geocoder.service.get_geo_location_cache_entry",
+        lambda conn, _: GeoLocationCacheEntry(
+            location_id="loc-1",
+            location_rank="city",
+            osm_type="relation",
+            osm_id=123,
+            osm_boundingbox=[1.0, 2.0, 3.0, 4.0],
+            geocode_candidates=[{"role": "point"}],
+            boundary_intent=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "services.geocoder.service.geocode_location",
+        lambda _: {"normalized_location": "Kyoto, Japan", "latitude": 1.0, "longitude": 2.0},
+    )
+    monkeypatch.setattr("services.geocoder.service.save_geo_location", lambda conn, location: "loc-2")
+    monkeypatch.setattr("services.geocoder.service.link_document_location", lambda conn, **kwargs: "link-1")
+
+    status = _process_single_mention(_DummyConn(), mention, force_full_refresh=True)
+
+    assert status == "geocoded_and_linked"
+
+
 def test_process_all_mentions_resets_links_in_full_mode(monkeypatch) -> None:
     class DummyConn:
         def __enter__(self):

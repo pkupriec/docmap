@@ -19,6 +19,7 @@ Change rules:
 - Keep docs and code aligned in the same change set when behavior changes.
 - Do not maintain separate role-specific document variants.
 - Do not encode model-specific routing rules in canonical docs.
+- When user-approved implementation approach changes are made during execution, promote them to canonical docs in the same change set (architecture/operations/agent rules as applicable).
 
 Verification rules:
 

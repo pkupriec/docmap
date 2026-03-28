@@ -11,9 +11,9 @@
       "unmatched": 1
     },
     "country": {
-      "matched": 171,
-      "targets": 182,
-      "unmatched": 11
+      "matched": 350,
+      "targets": 378,
+      "unmatched": 28
     },
     "ocean": {
       "matched": 42,
@@ -24,13 +24,13 @@
   "output_path": "/app/services/analytics/assets/admin_boundaries.geojson",
   "source_path": "/app/services/analytics/assets/admin_boundaries_source.geojson",
   "totals": {
-    "countries": 182,
-    "features_written": 352,
-    "matched_countries": 171,
+    "countries": 378,
+    "features_written": 531,
+    "matched_countries": 350,
     "matched_regions": 131,
-    "matched_targets": 352,
+    "matched_targets": 531,
     "regions": 494,
-    "targets": 838
+    "targets": 1034
   },
   "unmatched": {
     "admin_region": [
@@ -402,17 +402,34 @@
       "the Americas"
     ],
     "country": [
-      "Io",
+      "Chiang Rai Province, Thailand",
+      "Orkhon River, Mongolia",
+      "Balkans",
+      "Irtysh River, Kazakhstan",
+      "Thule Air Base, Greenland",
+      "Zackenberg, Greenland",
+      "Baltic States",
+      "Yangtze River, China",
       "Gibraltar",
-      "Andorra la Vella, Andorra",
-      "Great Barrier Reef, Australia",
-      "Caicos Island, Turks and Caicos Islands",
-      "British Isles",
+      "R\u0101zna National Park, Latvia",
+      "80\u00b044'07.7\"N 67\u00b009'54.9\"W",
+      "Greenland, Denmark",
+      "Northeast Greenland National Park, Greenland",
+      "Balkan Mountains, Bulgaria",
+      "Balkan Peninsula",
+      "Phuket, Thailand",
+      "Greenland, Greenland",
+      "People\u2019s Republic of China",
       "Tokelau",
-      "Korea",
+      "Cape Farewell, Greenland",
+      "Myanmar, Myanmar",
+      "Vatican City, Vatican City",
       "Abkhazia, Georgia",
-      "Congo",
-      "Adamstown, Pitcairn Islands"
+      "Ptuj, Slovenia",
+      "Kaffeklubben Island, Greenland",
+      "Pripyat River, Belarus",
+      "Crozier Island, Greenland",
+      "Kazakhstan, Kazakhstan"
     ],
     "ocean": [
       "Channel Islands National Park, California, United States",

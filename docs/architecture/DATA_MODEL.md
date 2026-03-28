@@ -19,6 +19,13 @@ Schema authority:
 
 `geo_locations` includes canonical resolution metadata and OSM identity fields.
 
+Phase 19 geocoder-owned identity/geometry-candidate fields:
+- `osm_admin_level` (integer when available from upstream payload)
+- `boundary_intent` (boolean, deterministic mention-intent signal)
+- `geocode_candidates` (JSON array of stored point/boundary candidates for analytics selection)
+
+`geocode_candidates` is replayable state used by analytics for deterministic final geometry selection.
+
 ## BI Tables
 
 - `bi_documents`

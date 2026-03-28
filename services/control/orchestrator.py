@@ -30,7 +30,9 @@ STAGE_ITEM_LIMIT: int | None = None
 def _refresh_geo_identity_requested(run: dict[str, Any]) -> bool:
     params = run.get("parameters_json") or {}
     options = params.get("options") or {}
-    return bool(options.get("refresh_geo_identity"))
+    if "refresh_geo_identity" in options:
+        return bool(options.get("refresh_geo_identity"))
+    return True
 
 
 def _refresh_canonical_dictionary_requested(run: dict[str, Any]) -> bool | None:
@@ -38,7 +40,13 @@ def _refresh_canonical_dictionary_requested(run: dict[str, Any]) -> bool | None:
     options = params.get("options") or {}
     if "refresh_canonical_dictionary" in options:
         return bool(options.get("refresh_canonical_dictionary"))
-    return None
+    return True
+
+
+def _full_refresh_geo_information_requested(run: dict[str, Any]) -> bool:
+    params = run.get("parameters_json") or {}
+    options = params.get("options") or {}
+    return bool(options.get("full_refresh_geo_information"))
 
 
 class ControlOrchestrator:
@@ -741,7 +749,8 @@ class ControlOrchestrator:
             params = run.get("parameters_json") or {}
             options = params.get("options") or {}
             process_unprocessed_only = bool(options.get("process_unprocessed_only"))
-            refresh_geo_identity = bool(options.get("refresh_geo_identity")) and not process_unprocessed_only
+            refresh_geo_identity = _refresh_geo_identity_requested(run) and not process_unprocessed_only
+            full_refresh_geo_information = _full_refresh_geo_information_requested(run) and not process_unprocessed_only
             stop_requested = False
             normalized = 0
             normalized_scanned = 0
@@ -886,6 +895,15 @@ class ControlOrchestrator:
                         "refresh_geo_identity enabled: cache entries with missing rank/OSM identity/bbox will be re-geocoded",
                         event_type="progress",
                     )
+                if full_refresh_geo_information:
+                    self.repository.append_log(
+                        run_id,
+                        stage,
+                        "pipeline",
+                        "INFO",
+                        "full_refresh_geo_information enabled: all cached geo rows will be re-geocoded from scratch",
+                        event_type="progress",
+                    )
             with get_connection() as conn:
                 pending_total = count_pending_mentions(conn) if process_unprocessed_only else count_all_mentions(conn)
             progress_total = max(pending_total, start_index)
@@ -1011,6 +1029,7 @@ class ControlOrchestrator:
                     offset=start_index,
                     reset_existing_links=start_index == 0,
                     refresh_missing_identity=refresh_geo_identity,
+                    force_full_refresh=full_refresh_geo_information,
                     on_mention=on_geocode_mention,
                     should_stop=lambda: stop_requested,
                 )
