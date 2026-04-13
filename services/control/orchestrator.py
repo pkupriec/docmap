@@ -1089,6 +1089,33 @@ class ControlOrchestrator:
                     current_index=processed,
                 )
 
+            def on_analytics_detail(step_name: str, processed_items: int, total_items: int) -> None:
+                if step_name != "admin_boundaries":
+                    return
+                if total_items <= 0:
+                    label = "admin_boundaries 0/0"
+                else:
+                    label = f"admin_boundaries {processed_items}/{total_items}"
+                self.repository.upsert_progress(
+                    run_id,
+                    stage,
+                    current_index=processed,
+                    total_items=total_steps,
+                    items_completed=processed,
+                    items_failed=0,
+                    current_item_label=label,
+                    message=f"analytics {processed}/{total_steps} ({label})",
+                )
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "analytics",
+                    "INFO",
+                    f"matching {label}",
+                    event_type="progress",
+                    current_index=processed,
+                )
+
             if start_index > 0:
                 self.repository.append_log(
                     run_id,
@@ -1099,7 +1126,11 @@ class ControlOrchestrator:
                     event_type="progress",
                     current_index=start_index,
                 )
-            stats = rebuild_analytics(on_step=on_analytics_step, start_index=start_index)
+            stats = rebuild_analytics(
+                on_step=on_analytics_step,
+                on_detail=on_analytics_detail,
+                start_index=start_index,
+            )
             total = sum(stats.values())
             self.repository.upsert_progress(
                 run_id,

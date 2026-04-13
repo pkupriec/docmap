@@ -16,6 +16,7 @@ import type {
 
 type UiStatus = "loading" | "ready" | "error";
 type ErrorContext = "startup" | "location_documents" | "search" | "unknown";
+type BoundariesStatus = "idle" | "loading" | "ready" | "error";
 type ActiveMode =
   | "PDF Modal"
   | "Pinned Document"
@@ -79,7 +80,7 @@ function formatRank(rank: string | null | undefined): string {
 
 function errorMessageFor(context: ErrorContext): string {
   if (context === "startup") {
-    return "Unable to load locations and boundaries.";
+    return "Unable to load locations.";
   }
   if (context === "location_documents") {
     return "Unable to load linked documents for this location.";
@@ -100,6 +101,7 @@ export default function App() {
   const [errorContext, setErrorContext] = useState<ErrorContext>("unknown");
   const [locations, setLocations] = useState<Location[]>([]);
   const [boundaries, setBoundaries] = useState<BoundaryCollection>(EMPTY_BOUNDARIES);
+  const [boundariesStatus, setBoundariesStatus] = useState<BoundariesStatus>("idle");
   const [locationDocuments, setLocationDocuments] = useState<DocumentCard[]>([]);
   const [locationDocumentsMeta, setLocationDocumentsMeta] = useState<LocationDocumentsResponse | null>(null);
   const [isLoadingMoreDocuments, setIsLoadingMoreDocuments] = useState(false);
@@ -128,6 +130,9 @@ export default function App() {
   const viewportRafRef = useRef<number | null>(null);
   const cardRefs = useRef<Record<string, HTMLElement | null>>({});
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const startupTimestampRef = useRef<number>(performance.now());
+  const firstMeaningfulRenderLoggedRef = useRef(false);
+  const boundariesReadyLoggedRef = useRef(false);
 
   const selectedLocationId = pinnedLocationId ?? hoveredLocationId;
   const searchActive = searchQuery.trim().length >= 3;
@@ -213,15 +218,22 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchLocations(), fetchBoundaries()])
-      .then(([items, nextBoundaries]) => {
+    startupTimestampRef.current = performance.now();
+    setBoundariesStatus("loading");
+
+    fetchLocations()
+      .then((items) => {
         if (cancelled) {
           return;
         }
         setLocations(items.filter((item) => isFiniteCoordinate(item.latitude, item.longitude)));
-        setBoundaries(nextBoundaries);
         setErrorContext("unknown");
         setStatus("ready");
+        if (!firstMeaningfulRenderLoggedRef.current) {
+          firstMeaningfulRenderLoggedRef.current = true;
+          const elapsedMs = performance.now() - startupTimestampRef.current;
+          console.info("presentation.performance.first_meaningful_render_ms", elapsedMs.toFixed(2));
+        }
       })
       .catch(() => {
         if (cancelled) {
@@ -230,6 +242,31 @@ export default function App() {
         setErrorContext("startup");
         setStatus("error");
       });
+
+    fetchBoundaries({
+      lite: true,
+      rank_filter: "default",
+    })
+      .then((nextBoundaries) => {
+        if (cancelled) {
+          return;
+        }
+        setBoundaries(nextBoundaries);
+        setBoundariesStatus("ready");
+        if (!boundariesReadyLoggedRef.current) {
+          boundariesReadyLoggedRef.current = true;
+          const elapsedMs = performance.now() - startupTimestampRef.current;
+          console.info("presentation.performance.boundaries_ready_ms", elapsedMs.toFixed(2));
+        }
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setBoundariesStatus("error");
+        console.warn("presentation.boundaries_unavailable");
+      });
+
     return () => {
       cancelled = true;
     };
@@ -646,7 +683,7 @@ export default function App() {
           <div className="map-legend" aria-label="Map legend">
             <h3>Legend</h3>
             <div className="legend-row"><span className="legend-dot city" /> City point</div>
-            <div className="legend-row"><span className="legend-dot fallback" /> Missing boundary fallback</div>
+            <div className="legend-row"><span className="legend-dot fallback" /> Boundary-unavailable point</div>
             <div className="legend-row"><span className="legend-polygon" /> Region/Country/Continent/Ocean polygon</div>
           </div>
         </main>
@@ -687,8 +724,14 @@ export default function App() {
                 : ""}
             </p>
           ) : null}
-          {status === "loading" && <p>Loading locations and boundaries...</p>}
+          {status === "loading" && <p>Loading locations...</p>}
           {status === "error" && <p>{errorMessageFor(errorContext)}</p>}
+          {status === "ready" && boundariesStatus === "loading" ? (
+            <p className="fallback-note">Loading boundaries in background...</p>
+          ) : null}
+          {status === "ready" && boundariesStatus === "error" ? (
+            <p className="fallback-note">Boundaries unavailable. Showing location points only.</p>
+          ) : null}
 
           {status === "ready" && searchActive ? (
             <div className="search-result-locations">

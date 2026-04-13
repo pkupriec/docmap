@@ -71,6 +71,10 @@ export type BoundaryFeature = {
     location_rank?: string;
     country_name?: string | null;
     region_name?: string | null;
+    aliases?: string[] | null;
+    safe_aliases?: string[] | null;
+    country_aliases?: string[] | null;
+    region_aliases?: string[] | null;
     match_strategy?: string;
   };
   geometry: BoundaryGeometry;
@@ -79,6 +83,12 @@ export type BoundaryFeature = {
 export type BoundaryCollection = {
   type: "FeatureCollection";
   features: BoundaryFeature[];
+};
+
+export type BoundariesRequestOptions = {
+  lite?: boolean;
+  rank_filter?: "default" | "all";
+  geometry_detail?: "low" | "full";
 };
 
 export type MapViewport = {

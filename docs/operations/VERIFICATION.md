@@ -23,6 +23,25 @@
 - Confirm presentation API includes boundaries, document card, document PDF, and search endpoints.
 - Confirm location-documents response includes pagination and scope metadata.
 - Confirm schema/docs alignment for canonical geo fields and `bi_document_locations` columns.
+- Confirm boundaries endpoint supports additive params:
+  - `rank_filter=default|all`
+  - `geometry_detail=low|full`
+
+## Presentation Rendering Performance Checks
+
+1. Start presentation stack and open browser console.
+2. Load presentation root once and record:
+   - `presentation.performance.first_meaningful_render_ms`
+   - `presentation.performance.boundaries_ready_ms`
+3. Measure boundaries endpoint payload and latency for variants:
+   - `lite=1&rank_filter=default` (default full detail)
+   - `lite=1&rank_filter=default&geometry_detail=low`
+   - `lite=1&rank_filter=all&geometry_detail=low`
+   - `lite=1&rank_filter=all&geometry_detail=full`
+4. For each variant, record:
+   - decoded JSON bytes
+   - encoded payload bytes
+   - endpoint latency cold/warm
 
 ## Canonical Refresh Smoke
 

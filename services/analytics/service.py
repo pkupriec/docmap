@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _ADMIN_LEVEL_RE = re.compile(r"^admin_level_(\d+)$")
 
 AnalyticsStepCallback = Callable[[str, int], None]
+AnalyticsDetailCallback = Callable[[str, int, int], None]
 
 ANALYTICS_STEP_NAMES = [
     "bi_documents",
@@ -25,6 +26,45 @@ ANALYTICS_STEP_NAMES = [
     "admin_boundaries",
     "bi_location_hierarchy",
 ]
+
+
+def _coerce_bi_location_rank(
+    *,
+    location_rank: str | None,
+    precision: str | None,
+    city: str | None,
+    region: str | None,
+    country: str | None,
+) -> str:
+    rank_raw = str(location_rank or "unknown").strip().lower()
+    precision_raw = str(precision or "").strip().lower()
+
+    if precision_raw == "country":
+        return "country"
+    if precision_raw == "admin_region":
+        if rank_raw == "national_park":
+            return "national_park"
+        if rank_raw == "desert":
+            return "desert"
+        if rank_raw.startswith("admin_level_"):
+            return rank_raw
+        return "admin_region"
+    if precision_raw == "city":
+        return "city"
+
+    if rank_raw == "region":
+        return "admin_region"
+    if rank_raw == "admin_level_2":
+        return "country"
+    if rank_raw:
+        return rank_raw
+    if city:
+        return "city"
+    if region:
+        return "admin_region"
+    if country:
+        return "country"
+    return "unknown"
 
 
 def build_admin_boundaries_source(_conn: Connection) -> int:
@@ -138,9 +178,13 @@ def build_bi_locations(conn: Connection) -> int:
 
         nodes: list[dict[str, object]] = []
         for row in rows:
-            rank_raw = str(row[8] or "unknown").strip().lower()
-            if rank_raw == "region":
-                rank_raw = "admin_region"
+            rank_raw = _coerce_bi_location_rank(
+                location_rank=str(row[8] or "unknown"),
+                precision=str(row[7] or ""),
+                city=str(row[4] or "") or None,
+                region=str(row[3] or "") or None,
+                country=str(row[2] or "") or None,
+            )
             bbox = _parse_bbox(row[9])
             node = {
                 "location_id": row[0],
@@ -170,7 +214,29 @@ def build_bi_locations(conn: Connection) -> int:
             lat = node.get("latitude")
             lon = node.get("longitude")
             group = by_country.get(country, [])
+            if rank in {"country", "continent", "ocean"}:
+                return None
             if rank == "city":
+                admin_candidates = [
+                    item
+                    for item in group
+                    if (
+                        str(item.get("location_rank") or "").startswith("admin_level_")
+                        or str(item.get("location_rank") or "") == "admin_region"
+                    )
+                    and item.get("location_id") != node.get("location_id")
+                    and _bbox_contains_point(item.get("bbox"), lat, lon)
+                ]
+                admin_candidates.sort(
+                    key=lambda item: (
+                        -int(_admin_level(str(item.get("location_rank"))) or 0),
+                        str(item.get("location_id")),
+                    )
+                )
+                if admin_candidates:
+                    return admin_candidates[0].get("location_id")
+
+            if rank in {"national_park", "desert"}:
                 admin_candidates = [
                     item
                     for item in group
@@ -216,7 +282,12 @@ def build_bi_locations(conn: Connection) -> int:
                 and str(item.get("location_rank") or "") == "country"
             ]
             if country_candidates:
-                country_candidates.sort(key=lambda item: str(item.get("location_id")))
+                country_candidates.sort(
+                    key=lambda item: (
+                        -int(item.get("document_count") or 0),
+                        str(item.get("location_id")),
+                    )
+                )
                 return country_candidates[0].get("location_id")
             return None
 
@@ -417,6 +488,8 @@ def build_bi_location_hierarchy(conn: Connection) -> int:
                     AND (
                         descendant.location_rank = 'country'
                         OR descendant.location_rank = 'admin_region'
+                        OR descendant.location_rank = 'national_park'
+                        OR descendant.location_rank = 'desert'
                         OR descendant.location_rank LIKE 'admin_level_%'
                     )
                 WHERE
@@ -482,7 +555,12 @@ def build_bi_location_hierarchy(conn: Connection) -> int:
         return cur.rowcount
 
 
-def rebuild_analytics(*, on_step: AnalyticsStepCallback | None = None, start_index: int = 0) -> dict[str, int]:
+def rebuild_analytics(
+    *,
+    on_step: AnalyticsStepCallback | None = None,
+    on_detail: AnalyticsDetailCallback | None = None,
+    start_index: int = 0,
+) -> dict[str, int]:
     logger.info("analytics.rebuild_start")
     steps = [
         ("bi_documents", build_bi_documents),
@@ -503,26 +581,37 @@ def rebuild_analytics(*, on_step: AnalyticsStepCallback | None = None, start_ind
     hierarchy_rows = 0
     admin_boundaries_source_rows = 0
     admin_boundaries_rows = 0
-    with get_connection() as conn:
-        for idx, (name, fn) in enumerate(steps):
-            if idx < start_index:
-                continue
-            rows = fn(conn)
-            if name == "bi_documents":
-                documents_rows = rows
-            elif name == "bi_locations":
-                locations_rows = rows
-            elif name == "bi_document_locations":
-                links_rows = rows
-            elif name == "bi_location_hierarchy":
-                hierarchy_rows = rows
-            elif name == "admin_boundaries_source":
-                admin_boundaries_source_rows = rows
+    for idx, (name, fn) in enumerate(steps):
+        if idx < start_index:
+            continue
+        with get_connection() as conn:
+            if name == "admin_boundaries":
+                rows = build_admin_boundaries_asset(
+                    conn,
+                    on_target_progress=(
+                        (lambda processed, total: on_detail("admin_boundaries", processed, total))
+                        if on_detail
+                        else None
+                    ),
+                ).features_written
             else:
-                admin_boundaries_rows = rows
-            if on_step:
-                on_step(name, rows)
-        conn.commit()
+                rows = fn(conn)
+            conn.commit()
+
+        if name == "bi_documents":
+            documents_rows = rows
+        elif name == "bi_locations":
+            locations_rows = rows
+        elif name == "bi_document_locations":
+            links_rows = rows
+        elif name == "bi_location_hierarchy":
+            hierarchy_rows = rows
+        elif name == "admin_boundaries_source":
+            admin_boundaries_source_rows = rows
+        else:
+            admin_boundaries_rows = rows
+        if on_step:
+            on_step(name, rows)
 
     stats = {
         "bi_documents": documents_rows,

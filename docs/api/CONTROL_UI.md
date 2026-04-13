@@ -48,7 +48,6 @@ The header contains:
 - Start Run button
 - Process Unprocessed button (`implemented`)
 - active run status badge
-- backend connectivity indicator
 
 The header must remain visible at all times.
 
@@ -70,31 +69,16 @@ Simple table.
 - Pipeline Type
 - Status
 - Current Stage
-- Progress Summary
 - Started At
 - Finished At
 
 ## Behavior
 
 - auto-refresh every 5 seconds
-- highlight active run
+- highlight selected run
 - selecting a row opens Run Details
 - newest runs first
 
-## Progress Summary rendering
-
-If progress exists:
-
-- document-oriented stages:
-  `134 / 812`
-- generic stages:
-  `87 / 203`
-
-If progress is unavailable:
-
-- show `—`
-
----
 
 # View 2 — Run Details
 
@@ -142,10 +126,16 @@ Columns:
 - Started At
 - Finished At
 - Retry Action
+- Resume Action
 
 Retry Action:
 
 - one Retry button per stage
+
+Resume Action:
+
+- one Resume button per stage
+- enabled only for partially completed, non-success stages
 
 ### 4. Progress Panel
 
@@ -222,7 +212,12 @@ Submit a `start_run` command.
 - Document URL
 - Document Range Start
 - Document Range End
-- Options JSON
+- `options.full_refresh_geo_information` checkbox
+
+Current modal behavior:
+
+- no free-form options JSON editor
+- full-refresh checkbox is shown only for `full_pipeline` and `geocode_only` in default mode
 
 ## Pipeline Type select values
 
@@ -248,7 +243,6 @@ Submit to:
 
 On success:
 
-- show returned command id
 - refresh runs list
 - close modal
 
@@ -262,7 +256,7 @@ On error:
 
 ## Purpose
 
-Submit `start_run` with unprocessed-only behavior for `crawl` and `extract`.
+Submit `start_run` with unprocessed-only behavior for `crawl`, `extract`, and `geocode` linking.
 
 ## Trigger
 
@@ -270,7 +264,14 @@ Header button: `Process Unprocessed`.
 
 ## API payload
 
-Submit to `POST /api/runs` with:
+Current UI opens a dedicated modal and submits `POST /api/runs` with:
+
+- `options.process_unprocessed_only=true`
+- user-selected `pipeline_type`
+- user-selected `target_scope`
+- optional `document_url` / `document_range`
+
+Example payload:
 
 ```json
 {
@@ -286,6 +287,7 @@ Submit to `POST /api/runs` with:
 
 - `crawl`: process URLs without snapshots and URLs whose latest snapshot has no PDF blob.
 - `extract`: process snapshots without `extraction_runs`.
+- `geocode`: process mentions without document-location links.
 - explicit scopes (`single_document`, `document_range`) keep forced reprocessing behavior.
 
 ---
@@ -378,10 +380,8 @@ On SSE disconnect:
 
 When opening a run:
 
-1. `GET /api/runs/{run_id}`
-2. `GET /api/runs/{run_id}/stages`
-3. `GET /api/runs/{run_id}/progress`
-4. `GET /api/runs/{run_id}/logs?limit=200`
+1. `GET /api/runs/{run_id}` (includes run + stages + progress)
+2. `GET /api/runs/{run_id}/logs?limit=200`
 
 Then start SSE.
 

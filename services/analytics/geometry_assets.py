@@ -7,7 +7,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 from psycopg import Connection
@@ -38,6 +38,7 @@ RANK_ORDER = {
 }
 NAME_SPLIT_RE = re.compile(r"[|/;]+")
 NON_ALNUM_RE = re.compile(r"[^a-z0-9\s]+")
+BoundaryProgressCallback = Callable[[int, int], None]
 
 
 @dataclass(frozen=True)
@@ -193,11 +194,15 @@ def _infer_rank_from_row(
     country: str | None,
 ) -> str:
     normalized_rank = _normalize_rank(location_rank)
-    if normalized_rank and normalized_rank != "unknown":
-        return normalized_rank
     precision_value = _normalize(precision)
     if precision_value in {"city", "admin_region", "country", "continent", "ocean"}:
         return precision_value
+    if normalized_rank == "admin_level_2":
+        return "country"
+    if _ADMIN_LEVEL_PATTERN.match(normalized_rank):
+        return "admin_region"
+    if normalized_rank and normalized_rank != "unknown":
+        return normalized_rank
     if city:
         return "city"
     if region:
@@ -603,6 +608,7 @@ def build_admin_boundaries_asset(
     source_path: Path | None = None,
     output_path: Path | None = None,
     coverage_path: Path | None = None,
+    on_target_progress: BoundaryProgressCallback | None = None,
 ) -> GeometryBuildResult:
     source = source_path or Path(os.getenv("DOCMAP_ADMIN_BOUNDARIES_SOURCE", str(_default_source_path())))
     output = output_path or Path(os.getenv("DOCMAP_ADMIN_BOUNDARIES_OUTPUT", str(_default_output_path())))
@@ -624,7 +630,11 @@ def build_admin_boundaries_asset(
     unmatched_by_class: dict[str, int] = {}
     match_strategy_counts: dict[str, int] = {}
 
-    for target in targets:
+    total_targets = len(targets)
+    if on_target_progress:
+        on_target_progress(0, total_targets)
+
+    for index, target in enumerate(targets, start=1):
         total_by_rank[target.location_rank] = total_by_rank.get(target.location_rank, 0) + 1
         matched_feature, match_strategy = _select_feature_for_target(
             target,
@@ -639,12 +649,16 @@ def build_admin_boundaries_asset(
             unmatched_by_reason[match_strategy] = unmatched_by_reason.get(match_strategy, 0) + 1
             entity_class = _entity_class_for_rank(target.location_rank)
             unmatched_by_class[entity_class] = unmatched_by_class.get(entity_class, 0) + 1
+            if on_target_progress and (index == 1 or index % 100 == 0 or index == total_targets):
+                on_target_progress(index, total_targets)
             continue
 
         geometry = matched_feature.get("geometry")
         if not isinstance(geometry, dict):
             unmatched_by_rank.setdefault(target.location_rank, []).append(_target_label(target))
             unmatched_by_reason["invalid_geometry"] = unmatched_by_reason.get("invalid_geometry", 0) + 1
+            if on_target_progress and (index == 1 or index % 100 == 0 or index == total_targets):
+                on_target_progress(index, total_targets)
             continue
 
         match_strategy_counts[match_strategy] = match_strategy_counts.get(match_strategy, 0) + 1
@@ -665,6 +679,8 @@ def build_admin_boundaries_asset(
             }
         )
         matched_by_rank[target.location_rank] = matched_by_rank.get(target.location_rank, 0) + 1
+        if on_target_progress and (index == 1 or index % 100 == 0 or index == total_targets):
+            on_target_progress(index, total_targets)
 
     selected_features.sort(
         key=lambda item: (

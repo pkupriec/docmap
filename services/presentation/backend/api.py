@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 import os
+import threading
+import time
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, FastAPI, Query, Request
@@ -13,8 +17,42 @@ from services.common.logging import configure_logging
 from services.common.migrations import run_startup_migrations
 from services.presentation.backend.repository import PresentationRepository
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/map")
+
+RankFilter = Literal["default", "all"]
+GeometryDetail = Literal["low", "full"]
+
+
+class BoundariesCache:
+    def __init__(self, *, ttl_seconds: float) -> None:
+        self._ttl_seconds = ttl_seconds
+        self._data: dict[tuple[bool, RankFilter, GeometryDetail], tuple[float, dict[str, object]]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple[bool, RankFilter, GeometryDetail]) -> dict[str, object] | None:
+        now = time.monotonic()
+        with self._lock:
+            cached = self._data.get(key)
+            if cached is None:
+                return None
+            expires_at, payload = cached
+            if expires_at <= now:
+                self._data.pop(key, None)
+                return None
+            return payload
+
+    def set(self, key: tuple[bool, RankFilter, GeometryDetail], payload: dict[str, object]) -> None:
+        with self._lock:
+            self._data[key] = (time.monotonic() + self._ttl_seconds, payload)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+
+BOUNDARIES_CACHE = BoundariesCache(ttl_seconds=10 * 60)
 
 
 def _as_str_or_none(value: object | None) -> str | None:
@@ -116,9 +154,39 @@ def get_locations() -> list[dict[str, object]]:
 
 
 @router.get("/boundaries")
-def get_boundaries(lite: bool = Query(default=False)) -> dict[str, object]:
+def get_boundaries(
+    lite: bool = Query(default=False),
+    rank_filter: RankFilter = Query(default="default"),
+    geometry_detail: GeometryDetail = Query(default="full"),
+) -> dict[str, object]:
+    cache_key = (lite, rank_filter, geometry_detail)
+    cached_payload = BOUNDARIES_CACHE.get(cache_key)
+    if cached_payload is not None:
+        logger.info(
+            "presentation.boundaries_cache_hit lite=%s rank_filter=%s geometry_detail=%s",
+            lite,
+            rank_filter,
+            geometry_detail,
+        )
+        return cached_payload
+
     repo = PresentationRepository()
-    return repo.get_admin_boundaries_geojson(minimal=lite)
+    start = time.perf_counter()
+    payload = repo.get_admin_boundaries_geojson(
+        minimal=lite,
+        rank_filter=rank_filter,
+        geometry_detail=geometry_detail,
+    )
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    BOUNDARIES_CACHE.set(cache_key, payload)
+    logger.info(
+        "presentation.boundaries_cache_miss lite=%s rank_filter=%s geometry_detail=%s duration_ms=%.2f",
+        lite,
+        rank_filter,
+        geometry_detail,
+        elapsed_ms,
+    )
+    return payload
 
 
 @router.get("/location/{location_id}/documents")
@@ -305,6 +373,7 @@ def create_presentation_app() -> FastAPI:
 
     @app.on_event("startup")
     def _startup() -> None:
+        BOUNDARIES_CACHE.clear()
         configure_logging()
         run_startup_migrations()
 

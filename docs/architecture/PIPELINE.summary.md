@@ -11,5 +11,6 @@ Key control semantics:
 - commands are queued and applied by orchestrator
 - cancellation is cooperative
 - stage resume uses `retry_stage` with `resume=true`
+- unprocessed mode ignores geo-refresh flags and geocode resume skips canonical refresh when resuming from index > 0
 
 Read [PIPELINE.md](PIPELINE.md) for run options, retry/resume rules, and observability.

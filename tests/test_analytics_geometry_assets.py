@@ -209,3 +209,41 @@ def test_select_feature_prefers_canonical_id_before_alias() -> None:
     assert matched is feature
     assert strategy == "canonical_id"
 
+
+def test_infer_rank_from_row_prefers_precision_over_admin_level() -> None:
+    assert (
+        geometry_assets._infer_rank_from_row(
+            location_rank="admin_level_8",
+            precision="city",
+            city="Helsinki",
+            region=None,
+            country="Finland",
+        )
+        == "city"
+    )
+
+
+def test_infer_rank_from_row_maps_admin_level_2_to_country() -> None:
+    assert (
+        geometry_assets._infer_rank_from_row(
+            location_rank="admin_level_2",
+            precision="country",
+            city=None,
+            region=None,
+            country="Finland",
+        )
+        == "country"
+    )
+
+
+def test_infer_rank_from_row_maps_deeper_admin_levels_to_admin_region() -> None:
+    assert (
+        geometry_assets._infer_rank_from_row(
+            location_rank="admin_level_4",
+            precision=None,
+            city=None,
+            region="Lapland",
+            country="Finland",
+        )
+        == "admin_region"
+    )

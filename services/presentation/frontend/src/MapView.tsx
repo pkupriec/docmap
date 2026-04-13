@@ -23,6 +23,49 @@ function isFiniteCoordinate(latitude: number, longitude: number): boolean {
   );
 }
 
+function canonicalizeBoundaryAlias(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function splitBoundaryAliasVariants(value: string): string[] {
+  const canonical = canonicalizeBoundaryAlias(value);
+  if (!canonical) {
+    return [];
+  }
+  const variants = new Set<string>([canonical]);
+  for (const part of canonical.split(",")) {
+    const trimmed = part.trim();
+    if (trimmed) {
+      variants.add(trimmed);
+    }
+  }
+  return Array.from(variants);
+}
+
+function collectBoundaryAliases(properties: BoundaryCollection["features"][number]["properties"]): string[] {
+  const collected = new Set<string>();
+  const pushValue = (value: string | null | undefined): void => {
+    for (const normalized of splitBoundaryAliasVariants(String(value ?? ""))) {
+      collected.add(normalized);
+    }
+  };
+  const pushValues = (values: string[] | null | undefined): void => {
+    for (const value of values ?? []) {
+      pushValue(value);
+    }
+  };
+
+  pushValue(properties.location_name);
+  pushValue(properties.country_name);
+  pushValue(properties.region_name);
+  pushValues(properties.aliases);
+  pushValues(properties.safe_aliases);
+  pushValues(properties.country_aliases);
+  pushValues(properties.region_aliases);
+
+  return Array.from(collected);
+}
+
 function pointInRing(lon: number, lat: number, ring: number[][]): boolean {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -93,7 +136,7 @@ type PointRecord = {
   longitude: number;
   latitude: number;
   documentCount: number;
-  missingBoundary: boolean;
+  boundaryUnavailable: boolean;
 };
 
 type Props = {
@@ -144,6 +187,26 @@ const CLICK_RANK_PRIORITY: Record<LocationRank, number> = {
 
 function normalizeLocationRank(location: Location): LocationRank {
   const rawRank = (location.location_rank ?? "").toLowerCase();
+  const precision = (location.precision ?? "").toLowerCase();
+  if (precision.includes("country")) {
+    return "country";
+  }
+  if (precision.includes("region") || precision.includes("state") || precision.includes("province")) {
+    return "admin_region";
+  }
+  if (precision.includes("city")) {
+    return "city";
+  }
+  const adminLevelMatch = rawRank.match(/^admin_level_(\d+)$/);
+  if (adminLevelMatch) {
+    const adminLevel = Number(adminLevelMatch[1]);
+    if (Number.isFinite(adminLevel)) {
+      if (adminLevel <= 2) {
+        return "country";
+      }
+      return "admin_region";
+    }
+  }
   if (rawRank === "region") {
     return "admin_region";
   }
@@ -156,14 +219,6 @@ function normalizeLocationRank(location: Location): LocationRank {
     rawRank === "unknown"
   ) {
     return rawRank;
-  }
-
-  const precision = (location.precision ?? "").toLowerCase();
-  if (precision.includes("country")) {
-    return "country";
-  }
-  if (precision.includes("region") || precision.includes("state") || precision.includes("province")) {
-    return "admin_region";
   }
   return "city";
 }
@@ -252,16 +307,16 @@ export function MapView({
   );
   const [pulsePhase, setPulsePhase] = useState(0);
 
-  const { boundaryByLocationId, boundaryByRankedName } = useMemo(() => {
+  const { boundaryByLocationId, boundaryByRankedAlias } = useMemo(() => {
     const byLocationId = new Map<
       string,
       { geometryType: "Polygon" | "MultiPolygon"; coordinates: number[][][] | number[][][][] }
     >();
-    const byRankedName = new Map<
+    const byRankedAlias = new Map<
       string,
       { geometryType: "Polygon" | "MultiPolygon"; coordinates: number[][][] | number[][][][] }
     >();
-    const rankedNameKey = (rank: string, name: string): string => `${rank}:${name}`;
+    const rankedAliasKey = (rank: string, alias: string): string => `${rank}:${alias}`;
 
     for (const feature of boundaries.features) {
       if (feature.geometry.type !== "Polygon" && feature.geometry.type !== "MultiPolygon") {
@@ -273,20 +328,19 @@ export function MapView({
       };
       const rank = String(feature.properties.location_rank ?? "unknown").toLowerCase();
       const normalizedRank = rank === "region" ? "admin_region" : rank;
-      const normalizedName = String(feature.properties.location_name ?? "").toLowerCase();
       const locationId = String(feature.properties.location_id ?? "").trim();
 
       if (locationId) {
         byLocationId.set(locationId, geometry);
       }
-      if (normalizedName) {
-        byRankedName.set(rankedNameKey(normalizedRank, normalizedName), geometry);
+      for (const alias of collectBoundaryAliases(feature.properties)) {
+        byRankedAlias.set(rankedAliasKey(normalizedRank, alias), geometry);
       }
     }
 
     return {
       boundaryByLocationId: byLocationId,
-      boundaryByRankedName: byRankedName,
+      boundaryByRankedAlias: byRankedAlias,
     };
   }, [boundaries]);
 
@@ -514,14 +568,16 @@ export function MapView({
     const nextPolygons: PolygonRecord[] = [];
     const nextPoints: PointRecord[] = [];
     const nextHighlights: Array<{ longitude: number; latitude: number; locationId: string }> = [];
-    const rankedNameKey = (rank: string, name: string): string => `${rank}:${name}`;
+    const rankedAliasKey = (rank: string, alias: string): string => `${rank}:${alias}`;
 
     for (const location of locations) {
       const rank = normalizeLocationRank(location);
-      const normalizedName = location.name.toLowerCase();
-      const polygon =
-        boundaryByLocationId.get(location.location_id) ??
-        boundaryByRankedName.get(rankedNameKey(rank, normalizedName)) ??
+      const polygonById = boundaryByLocationId.get(location.location_id);
+      const polygonByAlias =
+        polygonById ??
+        splitBoundaryAliasVariants(location.name)
+          .map((alias) => boundaryByRankedAlias.get(rankedAliasKey(rank, alias)) ?? null)
+          .find((value) => value !== null) ??
         null;
 
       if (highlightedSet.has(location.location_id)) {
@@ -532,14 +588,14 @@ export function MapView({
         });
       }
 
-      if (!polygon) {
+      if (!polygonByAlias) {
         nextPoints.push({
           locationId: location.location_id,
           rank,
           latitude: location.latitude,
           longitude: location.longitude,
           documentCount: location.document_count,
-          missingBoundary: true,
+          boundaryUnavailable: true,
         });
         continue;
       }
@@ -552,7 +608,7 @@ export function MapView({
             latitude: location.latitude,
             longitude: location.longitude,
             documentCount: location.document_count,
-            missingBoundary: false,
+            boundaryUnavailable: false,
           });
         } else {
           nextPolygons.push({
@@ -562,8 +618,8 @@ export function MapView({
               location_rank: rank,
             },
             geometry: {
-              type: polygon.geometryType,
-              coordinates: polygon.coordinates,
+              type: polygonByAlias.geometryType,
+              coordinates: polygonByAlias.coordinates,
             },
           });
         }
@@ -578,8 +634,8 @@ export function MapView({
             location_rank: rank,
           },
           geometry: {
-            type: polygon.geometryType,
-            coordinates: polygon.coordinates,
+            type: polygonByAlias.geometryType,
+            coordinates: polygonByAlias.coordinates,
           },
         });
         continue;
@@ -591,7 +647,7 @@ export function MapView({
         latitude: location.latitude,
         longitude: location.longitude,
         documentCount: location.document_count,
-        missingBoundary: false,
+        boundaryUnavailable: false,
       });
     }
 
@@ -608,7 +664,7 @@ export function MapView({
       pointRecords: nextPoints,
       highlightedPoints: nextHighlights,
     };
-  }, [boundaryByLocationId, boundaryByRankedName, cityPolygonMode, highlightedSet, locations]);
+  }, [boundaryByLocationId, boundaryByRankedAlias, cityPolygonMode, highlightedSet, locations]);
 
   const selectLocationForClick = useCallback(
     (
@@ -735,8 +791,8 @@ export function MapView({
           if (d.rank === "city") {
             return d.locationId === selectedLocationId ? [216, 70, 45, 245] : [28, 92, 205, 215];
           }
-          if (d.missingBoundary) {
-            return d.locationId === selectedLocationId ? [255, 40, 20, 255] : [230, 40, 30, 228];
+          if (d.boundaryUnavailable) {
+            return d.locationId === selectedLocationId ? [216, 70, 45, 245] : [96, 157, 214, 212];
           }
           return d.locationId === selectedLocationId ? [216, 70, 45, 245] : [44, 122, 192, 205];
         },

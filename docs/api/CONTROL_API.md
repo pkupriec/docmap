@@ -37,6 +37,14 @@ Current orchestrator-recognized options include:
 - `refresh_geo_identity` (defaults to `true` for geocode/full runs)
 - `full_refresh_geo_information` (forces full cache re-geocode from scratch)
 
+Validation notes:
+- invalid `pipeline_type` or `target_scope` returns `409` with `{"error":"invalid_request","detail":"..."}`.
+- duplicate pending `start_run` payload returns `409` with `{"error":"duplicate_command","detail":"..."}`.
+
+Retry notes:
+- `POST /runs/{run_id}/retry` accepts optional body `{ "options": { ... } }`.
+- retry creates a new run using target run `pipeline_type` + `target_scope`; payload options are merged into new run parameters.
+
 ## Streaming
 
 `GET /runs/{run_id}/events` emits:
@@ -45,6 +53,12 @@ Current orchestrator-recognized options include:
 - `progress`
 - `log`
 - `heartbeat`
+
+SSE notes:
+- query param `last_event_id` is interpreted as a numeric log cursor (`pipeline_logs.id`); non-integer values are treated as `0`.
+- `log` events use numeric ids from `pipeline_logs.id`.
+- `run_status`, `stage_status`, `progress`, and `heartbeat` use synthetic event ids.
+- stream interval is approximately 1 second.
 
 ## Error Payload
 
@@ -57,4 +71,5 @@ Current orchestrator-recognized options include:
 - API enqueues commands; orchestrator applies state transitions.
 - Duplicate pending `start_run` requests are rejected (`409`).
 - Single-active-run policy is enforced by runtime logic.
+- When another run is active, start/retry/retry-stage commands are deferred and the active run is moved to `cancelling`.
 - OpenAPI artifact: `docs/api/CONTROL_API.openapi.yaml`.

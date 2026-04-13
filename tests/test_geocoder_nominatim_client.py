@@ -172,3 +172,45 @@ def test_geocode_location_returns_none_after_rate_limit(monkeypatch) -> None:
         max_retries=2,
     )
     assert result is None
+
+
+def test_select_preferred_payload_skips_business_for_generic_region_query() -> None:
+    payloads = [
+        {
+            "class": "tourism",
+            "type": "hostel",
+            "addresstype": "tourism",
+            "display_name": "Siberia hostel, Moscow, Russia",
+        },
+        {
+            "class": "place",
+            "type": "region",
+            "addresstype": "region",
+            "display_name": "Siberia, Russia",
+        },
+    ]
+
+    chosen = nominatim_client._select_preferred_payload("Siberia, Russia", payloads)
+
+    assert chosen is payloads[1]
+
+
+def test_select_preferred_payload_keeps_business_for_explicit_business_query() -> None:
+    payloads = [
+        {
+            "class": "tourism",
+            "type": "hostel",
+            "addresstype": "tourism",
+            "display_name": "Syberia Hostel, Moscow, Russia",
+        },
+        {
+            "class": "place",
+            "type": "region",
+            "addresstype": "region",
+            "display_name": "Siberia, Russia",
+        },
+    ]
+
+    chosen = nominatim_client._select_preferred_payload("Syberia Hostel, Moscow, Russia", payloads)
+
+    assert chosen is payloads[0]

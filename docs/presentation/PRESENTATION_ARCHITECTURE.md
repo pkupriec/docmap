@@ -36,9 +36,10 @@ It does not write operational, BI, or control-plane tables.
 
 Current scope rules:
 - city -> city
-- admin_region -> admin_region + region + city
-- country -> country + admin_region + region + city
-- continent -> continent + country + admin_region + region + city
+- non-city ranks -> descendants from `bi_location_hierarchy` without additional rank filter
+
+Operational implication:
+- the exact non-city rank mix depends on hierarchy data materialization in BI tables.
 
 Response includes pagination and scope metadata (`total_items`, `returned_items`, `limit`, `offset`, `scope_rank`, `scope_location_count`).
 

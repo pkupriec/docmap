@@ -121,6 +121,7 @@ paths:
         - $ref: "#/components/parameters/RunId"
         - in: query
           name: last_event_id
+          description: Numeric cursor for pipeline_logs.id; non-integer values are treated as 0.
           schema:
             type: string
       responses:
@@ -256,7 +257,8 @@ components:
           additionalProperties: true
           description: |
             Open options object. Current runtime recognizes keys including:
-            process_unprocessed_only, refresh_canonical_dictionary, refresh_geo_identity.
+            process_unprocessed_only, refresh_canonical_dictionary, refresh_geo_identity,
+            full_refresh_geo_information.
 
     RetryRunRequest:
       type: object

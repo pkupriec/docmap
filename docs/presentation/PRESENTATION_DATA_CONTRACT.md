@@ -44,8 +44,9 @@ Notes:
 - `fallback_depth` is alias-resolution depth from repository logic, not hierarchy depth.
 - `total_items` is full result count before paging.
 - `returned_items` is the page item count after dedupe.
-- For non-city scopes, document aggregation uses selected geometry + recursive descendants from `bi_location_hierarchy`.
-- City scope remains city-only unless city polygons/hierarchy descendants exist.
+- unresolved location requests return `200` with `resolved_location_id=null` and empty `items`.
+- For non-city scopes, document aggregation uses recursive descendants from `bi_location_hierarchy` for the resolved location.
+- City scope applies a city-only rank filter.
 
 ## Document -> Locations Response (`GET /api/map/document/{document_id}/locations`)
 
@@ -64,7 +65,14 @@ Fields:
 
 GeoJSON `FeatureCollection` from `bi_admin_boundaries.feature_json`.
 
-`lite=true` returns a reduced feature payload.
+Query params:
+- `lite` (`false` default): reduced feature payload when `true`.
+- `rank_filter` (`default` default): `default|all`.
+- `geometry_detail` (`full` default): `low|full`.
+
+Default behavior (`rank_filter=default&geometry_detail=full`) excludes non-default specialty/admin-level ranks.
+
+Reduced-detail behavior is available via `geometry_detail=low`.
 
 ## Search Response (`GET /api/search`)
 

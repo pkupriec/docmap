@@ -62,6 +62,59 @@ _BOUNDARY_LIKE_TYPES = {
     "protected_area",
     "desert",
 }
+_BUSINESS_LIKE_CLASSES = {
+    "amenity",
+    "shop",
+    "tourism",
+    "leisure",
+    "office",
+    "craft",
+}
+_BUSINESS_LIKE_TYPES = {
+    "hostel",
+    "hotel",
+    "motel",
+    "guest_house",
+    "museum",
+    "restaurant",
+    "cafe",
+    "bar",
+    "pub",
+    "sauna",
+    "mall",
+    "supermarket",
+    "university",
+    "school",
+    "hospital",
+    "clinic",
+    "station",
+    "airport",
+    "building",
+}
+_BUSINESS_QUERY_TOKENS = {
+    "hostel",
+    "hotel",
+    "motel",
+    "guest house",
+    "museum",
+    "restaurant",
+    "cafe",
+    "bar",
+    "pub",
+    "sauna",
+    "mall",
+    "supermarket",
+    "university",
+    "school",
+    "hospital",
+    "clinic",
+    "station",
+    "airport",
+    "building",
+    "office",
+    "hq",
+    "headquarters",
+}
 _OCEAN_TOKEN_PATTERN = re.compile(
     r"(?<![a-z0-9])(?:%s)(?![a-z0-9])" % "|".join(re.escape(token) for token in _OCEAN_TOKENS),
     flags=re.IGNORECASE,
@@ -261,6 +314,13 @@ def _detect_boundary_intent(name: str) -> bool:
     return any(token in tokens for token in _BOUNDARY_INTENT_TOKENS)
 
 
+def _query_explicitly_mentions_business(name: str) -> bool:
+    normalized = _normalize_text(name)
+    if not normalized:
+        return False
+    return any(token in normalized for token in _BUSINESS_QUERY_TOKENS)
+
+
 def _is_boundary_like(payload: dict[str, Any]) -> bool:
     normalized_type = _normalize_text(payload.get("type"))
     normalized_addresstype = _normalize_text(payload.get("addresstype"))
@@ -281,6 +341,17 @@ def _is_point_like(payload: dict[str, Any]) -> bool:
     if normalized_addresstype in _POINT_LIKE_TYPES:
         return True
     return not _is_boundary_like(payload)
+
+
+def _is_business_like(payload: dict[str, Any]) -> bool:
+    normalized_class = _normalize_text(payload.get("class") or payload.get("category"))
+    normalized_type = _normalize_text(payload.get("type"))
+    normalized_addresstype = _normalize_text(payload.get("addresstype"))
+    return (
+        normalized_class in _BUSINESS_LIKE_CLASSES
+        or normalized_type in _BUSINESS_LIKE_TYPES
+        or normalized_addresstype in _BUSINESS_LIKE_TYPES
+    )
 
 
 def _candidate_payload(payload: dict[str, Any], *, role: str, source_query: str) -> dict[str, Any] | None:
@@ -323,6 +394,17 @@ def _build_candidate_set(*, primary_query: str, payloads: list[dict[str, Any]]) 
         seen.add(key)
         candidates.append(candidate)
     return candidates
+
+
+def _select_preferred_payload(name: str, payloads: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not payloads:
+        return None
+    if _query_explicitly_mentions_business(name):
+        return payloads[0]
+    for payload in payloads:
+        if not _is_business_like(payload):
+            return payload
+    return payloads[0]
 
 
 def infer_location_rank(
@@ -421,7 +503,9 @@ def geocode_location(
         if not payloads:
             logger.info("geocoder.nominatim_not_found name=%s query=%s", name, query)
             continue
-        top_payload = payloads[0]
+        top_payload = _select_preferred_payload(name, payloads)
+        if top_payload is None:
+            continue
         boundary_intent = _detect_boundary_intent(name)
         candidates = _build_candidate_set(primary_query=query, payloads=payloads)
         if boundary_intent and _is_point_like(top_payload):

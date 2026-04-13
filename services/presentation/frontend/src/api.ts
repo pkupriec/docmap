@@ -1,5 +1,6 @@
 import type {
   BoundaryCollection,
+  BoundariesRequestOptions,
   DocumentCard,
   DocumentLocation,
   Location,
@@ -19,8 +20,16 @@ export function fetchLocations(): Promise<Location[]> {
   return getJson<Location[]>("/api/map/locations");
 }
 
-export function fetchBoundaries(): Promise<BoundaryCollection> {
-  return getJson<BoundaryCollection>("/api/map/boundaries?lite=1");
+export function fetchBoundaries(options?: BoundariesRequestOptions): Promise<BoundaryCollection> {
+  const params = new URLSearchParams();
+  params.set("lite", options?.lite ? "1" : "0");
+  if (options?.rank_filter) {
+    params.set("rank_filter", options.rank_filter);
+  }
+  if (options?.geometry_detail) {
+    params.set("geometry_detail", options.geometry_detail);
+  }
+  return getJson<BoundaryCollection>(`/api/map/boundaries?${params.toString()}`);
 }
 
 export function fetchLocationDocuments(

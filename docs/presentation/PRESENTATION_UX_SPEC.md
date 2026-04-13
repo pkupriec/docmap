@@ -91,14 +91,16 @@ Current notes:
 Current startup behavior:
 
 - the frontend starts in `loading`
-- it fetches locations and boundaries together
-- the UI becomes `ready` only after both startup requests succeed
+- it fetches locations first for initial UI readiness
+- boundaries are fetched in background and hydrate map overlays when available
+- the UI becomes `ready` after locations load successfully
 
 Current error behavior:
 
-- startup failure shows `Unable to load locations and boundaries.`
+- startup failure shows `Unable to load locations.`
 - location-document fetch failure shows `Unable to load linked documents for this location.`
 - search failure shows `Unable to load search results.`
+- boundaries-only failure is non-fatal and shows `Boundaries unavailable. Showing location points only.`
 
 ## Hover and Pin Behavior
 
@@ -262,7 +264,7 @@ Current matching behavior:
 
 Current visual fallback semantics:
 
-- missing-boundary non-city points are red
+- boundary-unavailable non-city points use a neutral blue point style
 - city points remain blue when not selected
 
 Click behavior for polygons matches click behavior for the corresponding location point.
@@ -299,7 +301,8 @@ contextual messages by failure scope instead of one generic message
 
 Current implementation realities to preserve during optimization work:
 
-- startup waits on both locations and full boundaries payload
+- startup no longer waits on boundaries payload
+- default boundaries request uses full-detail default (`GET /api/map/boundaries?lite=1&rank_filter=default`)
 - map movement currently causes frequent viewport-driven recomputation
 - PDF thumbnails are generated client-side from PDF URLs
 

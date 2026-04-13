@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import time
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
 from typing import Any
 from uuid import UUID
 
 from services.common.db import get_connection
+
+logger = logging.getLogger(__name__)
+
+RankFilter = Literal["default", "all"]
+GeometryDetail = Literal["low", "full"]
+DEFAULT_BOUNDARY_RANKS: set[str] = {"city", "admin_region", "region", "country", "continent", "ocean"}
 
 
 @dataclass(frozen=True)
@@ -24,12 +35,210 @@ class ScopedLocationDocuments:
 
 
 class PresentationRepository:
-    def get_admin_boundaries_geojson(self, *, minimal: bool = False) -> dict[str, Any]:
+    def _project_root(self) -> Path:
+        return Path(__file__).resolve().parents[3]
+
+    def _low_detail_artifact_paths(self) -> list[Path]:
+        configured = os.getenv("DOCMAP_BOUNDARIES_LOW_ARTIFACT_PATH")
+        if configured:
+            return [Path(configured)]
+        root = self._project_root()
+        return [
+            root / "services" / "presentation" / "frontend" / "src" / "assets" / "admin_boundaries.geojson",
+            Path("/app/services/presentation/frontend/src/assets/admin_boundaries.geojson"),
+            Path("/app/services/analytics/assets/admin_boundaries.low.default.v1.geojson"),
+        ]
+
+    def _normalize_rank(self, rank: object | None) -> str:
+        value = str(rank or "unknown").strip().lower()
+        if value == "region":
+            return "admin_region"
+        return value or "unknown"
+
+    def _geometry_supported(self, geometry: object) -> bool:
+        if not isinstance(geometry, dict):
+            return False
+        return geometry.get("type") in {"Polygon", "MultiPolygon"}
+
+    def _simplify_ring(self, ring: list[list[float]], stride: int) -> list[list[float]]:
+        if stride <= 1 or len(ring) <= 4:
+            return ring
+        is_closed = ring[0] == ring[-1]
+        core = ring[:-1] if is_closed else ring
+        if len(core) <= 3:
+            return ring
+        reduced = [core[0]]
+        for idx in range(1, len(core) - 1):
+            if idx % stride == 0:
+                reduced.append(core[idx])
+        reduced.append(core[-1])
+        if len(reduced) < 3:
+            reduced = core[:]
+        if is_closed:
+            if reduced[0] != reduced[-1]:
+                reduced.append(reduced[0])
+            if len(reduced) < 4:
+                reduced = core[:] + [core[0]]
+        return reduced
+
+    def _simplify_geometry(self, geometry: dict[str, Any], *, rank: str) -> dict[str, Any]:
+        stride_by_rank: dict[str, int] = {
+            "city": 2,
+            "admin_region": 4,
+            "country": 8,
+            "continent": 12,
+            "ocean": 12,
+        }
+        stride = stride_by_rank.get(rank, 6)
+        geometry_type = geometry.get("type")
+        coordinates = geometry.get("coordinates")
+        if geometry_type == "Polygon" and isinstance(coordinates, list):
+            return {
+                "type": "Polygon",
+                "coordinates": [
+                    self._simplify_ring(ring, stride) if isinstance(ring, list) else ring
+                    for ring in coordinates
+                ],
+            }
+        if geometry_type == "MultiPolygon" and isinstance(coordinates, list):
+            simplified_polygons: list[list[list[list[float]]]] = []
+            for polygon in coordinates:
+                if not isinstance(polygon, list):
+                    continue
+                simplified_polygons.append(
+                    [self._simplify_ring(ring, stride) if isinstance(ring, list) else ring for ring in polygon]
+                )
+            return {
+                "type": "MultiPolygon",
+                "coordinates": simplified_polygons,
+            }
+        return geometry
+
+    def _parse_feature_row(self, payload: object) -> dict[str, Any] | None:
+        if isinstance(payload, dict):
+            parsed = payload
+        elif isinstance(payload, (str, bytes, bytearray)):
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(parsed, dict):
+                return None
+        else:
+            return None
+        geometry = parsed.get("geometry")
+        if not self._geometry_supported(geometry):
+            return None
+        return parsed
+
+    def _serialize_feature(
+        self,
+        parsed: dict[str, Any],
+        *,
+        minimal: bool,
+        geometry_detail: GeometryDetail,
+    ) -> dict[str, Any] | None:
+        geometry = parsed.get("geometry")
+        if not isinstance(geometry, dict):
+            return None
+        raw_properties = parsed.get("properties")
+        properties = raw_properties if isinstance(raw_properties, dict) else {}
+        rank = self._normalize_rank(properties.get("location_rank"))
+        output_geometry = (
+            self._simplify_geometry(geometry, rank=rank) if geometry_detail == "low" else geometry
+        )
+        if minimal:
+            return {
+                "type": "Feature",
+                "properties": {
+                    "location_id": properties.get("location_id"),
+                    "location_name": properties.get("location_name"),
+                    "location_rank": properties.get("location_rank"),
+                    "country_name": properties.get("country_name"),
+                    "region_name": properties.get("region_name"),
+                    "aliases": properties.get("aliases"),
+                    "safe_aliases": properties.get("safe_aliases"),
+                    "country_aliases": properties.get("country_aliases"),
+                    "region_aliases": properties.get("region_aliases"),
+                    "match_strategy": properties.get("match_strategy"),
+                },
+                "geometry": {
+                    "type": output_geometry.get("type"),
+                    "coordinates": output_geometry.get("coordinates"),
+                },
+            }
+        return {
+            "type": "Feature",
+            "properties": properties,
+            "geometry": {
+                "type": output_geometry.get("type"),
+                "coordinates": output_geometry.get("coordinates"),
+            },
+        }
+
+    def _rank_allowed(self, rank: str, rank_filter: RankFilter) -> bool:
+        if rank_filter == "all":
+            return True
+        return rank in DEFAULT_BOUNDARY_RANKS
+
+    def _load_low_detail_default_artifact(self, *, minimal: bool) -> dict[str, Any] | None:
+        for candidate in self._low_detail_artifact_paths():
+            if not candidate.exists() or not candidate.is_file():
+                continue
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            features_payload = payload.get("features")
+            if not isinstance(features_payload, list):
+                continue
+            artifact_start = time.perf_counter()
+            features: list[dict[str, Any]] = []
+            for feature in features_payload:
+                if not isinstance(feature, dict):
+                    continue
+                properties = feature.get("properties")
+                if not isinstance(properties, dict):
+                    continue
+                rank = self._normalize_rank(properties.get("location_rank"))
+                if not self._rank_allowed(rank, "default"):
+                    continue
+                serialized = self._serialize_feature(feature, minimal=minimal, geometry_detail="low")
+                if serialized is None:
+                    continue
+                features.append(serialized)
+            logger.info(
+                "presentation.boundaries_artifact_loaded path=%s minimal=%s features=%s duration_ms=%.2f",
+                candidate,
+                minimal,
+                len(features),
+                (time.perf_counter() - artifact_start) * 1000.0,
+            )
+            return {
+                "type": "FeatureCollection",
+                "features": features,
+            }
+        return None
+
+    def get_admin_boundaries_geojson(
+        self,
+        *,
+        minimal: bool = False,
+        rank_filter: RankFilter = "default",
+        geometry_detail: GeometryDetail = "full",
+    ) -> dict[str, Any]:
+        if rank_filter == "default" and geometry_detail == "low":
+            artifact = self._load_low_detail_default_artifact(minimal=minimal)
+            if artifact is not None:
+                return artifact
+
+        total_start = time.perf_counter()
         sql = """
             SELECT feature_json
             FROM bi_admin_boundaries
             ORDER BY
                 CASE location_rank
+                    WHEN 'city' THEN 0
                     WHEN 'country' THEN 0
                     WHEN 'admin_region' THEN 1
                     WHEN 'continent' THEN 2
@@ -38,53 +247,45 @@ class PresentationRepository:
                 END,
                 location_id ASC
         """
+        db_start = time.perf_counter()
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql)
                 rows = cur.fetchall()
+        db_elapsed_ms = (time.perf_counter() - db_start) * 1000.0
+        transform_start = time.perf_counter()
         features: list[dict[str, Any]] = []
         for row in rows:
-            payload = row[0]
-            if isinstance(payload, dict):
-                parsed = payload
-            elif isinstance(payload, (str, bytes, bytearray)):
-                try:
-                    parsed = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(parsed, dict):
-                    continue
-            else:
+            parsed = self._parse_feature_row(row[0] if row else None)
+            if parsed is None:
                 continue
-
-            if not minimal:
-                features.append(parsed)
+            properties = parsed.get("properties")
+            if not isinstance(properties, dict):
                 continue
-
-            geometry = parsed.get("geometry")
-            if not isinstance(geometry, dict):
+            rank = self._normalize_rank(properties.get("location_rank"))
+            if not self._rank_allowed(rank, rank_filter):
                 continue
-            geometry_type = geometry.get("type")
-            coordinates = geometry.get("coordinates")
-            if geometry_type not in {"Polygon", "MultiPolygon"}:
-                continue
-
-            raw_properties = parsed.get("properties")
-            properties = raw_properties if isinstance(raw_properties, dict) else {}
-            features.append(
-                {
-                    "type": "Feature",
-                    "properties": {
-                        "location_id": properties.get("location_id"),
-                        "location_name": properties.get("location_name"),
-                        "location_rank": properties.get("location_rank"),
-                    },
-                    "geometry": {
-                        "type": geometry_type,
-                        "coordinates": coordinates,
-                    },
-                }
+            serialized = self._serialize_feature(
+                parsed,
+                minimal=minimal,
+                geometry_detail=geometry_detail,
             )
+            if serialized is None:
+                continue
+            features.append(serialized)
+        total_elapsed_ms = (time.perf_counter() - total_start) * 1000.0
+        transform_elapsed_ms = (time.perf_counter() - transform_start) * 1000.0
+        logger.info(
+            "presentation.boundaries_repo_fetch minimal=%s rank_filter=%s geometry_detail=%s rows=%s features=%s db_ms=%.2f transform_ms=%.2f total_ms=%.2f",
+            minimal,
+            rank_filter,
+            geometry_detail,
+            len(rows),
+            len(features),
+            db_elapsed_ms,
+            transform_elapsed_ms,
+            total_elapsed_ms,
+        )
         return {
             "type": "FeatureCollection",
             "features": features,

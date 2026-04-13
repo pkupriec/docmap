@@ -11,9 +11,21 @@ from services.presentation.backend.repository import ResolvedLocation
 
 class PresentationRepo:
     last_boundaries_minimal: bool | None = None
+    last_boundaries_rank_filter: str | None = None
+    last_boundaries_geometry_detail: str | None = None
+    boundaries_calls: int = 0
 
-    def get_admin_boundaries_geojson(self, *, minimal: bool = False):
+    def get_admin_boundaries_geojson(
+        self,
+        *,
+        minimal: bool = False,
+        rank_filter: str = "default",
+        geometry_detail: str = "full",
+    ):
         PresentationRepo.last_boundaries_minimal = minimal
+        PresentationRepo.last_boundaries_rank_filter = rank_filter
+        PresentationRepo.last_boundaries_geometry_detail = geometry_detail
+        PresentationRepo.boundaries_calls += 1
         return {
             "type": "FeatureCollection",
             "features": [
@@ -165,6 +177,11 @@ class PresentationRepo:
 def _client(monkeypatch) -> TestClient:
     monkeypatch.setattr(api, "PresentationRepository", PresentationRepo)
     monkeypatch.setattr(api, "run_startup_migrations", lambda: None)
+    api.BOUNDARIES_CACHE.clear()
+    PresentationRepo.boundaries_calls = 0
+    PresentationRepo.last_boundaries_minimal = None
+    PresentationRepo.last_boundaries_rank_filter = None
+    PresentationRepo.last_boundaries_geometry_detail = None
     app = create_presentation_app()
     return TestClient(app)
 
@@ -184,7 +201,6 @@ def test_locations_endpoint(monkeypatch) -> None:
 
 def test_boundaries_endpoint(monkeypatch) -> None:
     client = _client(monkeypatch)
-    PresentationRepo.last_boundaries_minimal = None
 
     response = client.get("/api/map/boundaries")
 
@@ -194,16 +210,30 @@ def test_boundaries_endpoint(monkeypatch) -> None:
     assert len(payload["features"]) == 1
     assert payload["features"][0]["properties"]["location_rank"] == "country"
     assert PresentationRepo.last_boundaries_minimal is False
+    assert PresentationRepo.last_boundaries_rank_filter == "default"
+    assert PresentationRepo.last_boundaries_geometry_detail == "full"
 
 
 def test_boundaries_lite_endpoint(monkeypatch) -> None:
     client = _client(monkeypatch)
-    PresentationRepo.last_boundaries_minimal = None
 
-    response = client.get("/api/map/boundaries?lite=1")
+    response = client.get("/api/map/boundaries?lite=1&rank_filter=all&geometry_detail=full")
 
     assert response.status_code == 200
     assert PresentationRepo.last_boundaries_minimal is True
+    assert PresentationRepo.last_boundaries_rank_filter == "all"
+    assert PresentationRepo.last_boundaries_geometry_detail == "full"
+
+
+def test_boundaries_endpoint_uses_in_process_cache(monkeypatch) -> None:
+    client = _client(monkeypatch)
+
+    response1 = client.get("/api/map/boundaries?lite=1&rank_filter=default&geometry_detail=full")
+    response2 = client.get("/api/map/boundaries?lite=1&rank_filter=default&geometry_detail=full")
+
+    assert response1.status_code == 200
+    assert response2.status_code == 200
+    assert PresentationRepo.boundaries_calls == 1
 
 
 def test_location_documents_endpoint(monkeypatch) -> None:

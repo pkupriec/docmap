@@ -49,12 +49,14 @@ Notable semantics:
 - `refresh_canonical_dictionary` controls canonical table refresh at geocode stage start.
 - `refresh_geo_identity` re-geocodes cache entries missing required identity/candidate fields.
 - `full_refresh_geo_information` bypasses cache-link reuse and re-geocodes every cached location from scratch.
+- in `process_unprocessed_only` mode, `refresh_geo_identity` and `full_refresh_geo_information` are ignored.
 - if `refresh_geo_identity` is used in full geocode mode, orchestrator auto-enqueues follow-up `analytics_only` run.
 
 ## Resume and Retry Semantics
 
 - Retry stage resets selected stage and downstream state.
 - Resume stage preserves saved progress index when valid.
+- geocode resume with `current_index > 0` skips canonical dictionary refresh for that resumed stage execution.
 - If resume index is exhausted, system falls back to full stage retry.
 
 ## Scheduler
