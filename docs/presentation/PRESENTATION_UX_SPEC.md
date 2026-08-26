@@ -20,6 +20,7 @@ The current left panel contains:
 - `DocMap` title
 - `Presentation Layer` caption
 - location count
+- precision mode selector (`Full precise`, `Balanced precise`, `Simplified`, `Primitive`)
 - `Clear` button
 
 Current collapsed behavior:
@@ -27,6 +28,13 @@ Current collapsed behavior:
 - the panel collapses to a thin vertical strip
 - the collapse toggle remains visible
 - compact quick actions are available in collapsed mode (search focus and clear)
+
+Precision control behavior:
+
+- session precision mode is selectable in the left control panel
+- changing precision mode swaps baked geometry source for the current session only
+- mode switch shows baked geometry loading status without clearing selection/search context
+- default startup precision is runtime-configurable and reflected by the initial selector value
 
 ## Map Viewport
 
@@ -91,8 +99,8 @@ Current notes:
 Current startup behavior:
 
 - the frontend starts in `loading`
-- it fetches locations first for initial UI readiness
-- boundaries are fetched in background and hydrate map overlays when available
+- it fetches locations and baked manifest for initial UI readiness
+- baked boundary tiles hydrate the normal map base layer
 - the UI becomes `ready` after locations load successfully
 
 Current error behavior:
@@ -100,7 +108,7 @@ Current error behavior:
 - startup failure shows `Unable to load locations.`
 - location-document fetch failure shows `Unable to load linked documents for this location.`
 - search failure shows `Unable to load search results.`
-- boundaries-only failure is non-fatal and shows `Boundaries unavailable. Showing location points only.`
+- baked-boundary failure is non-fatal and shows `Boundaries unavailable. Showing location points only.`
 
 ## Hover and Pin Behavior
 
@@ -254,6 +262,9 @@ Current rank behavior:
 - `admin_region`, `country`, `continent`, `ocean`:
   - polygon when a matching boundary exists
   - point when no boundary matches
+- `national_park`, `desert`:
+  - polygon when a matching boundary exists
+  - point when no boundary matches
 - other/unknown:
   - point
 
@@ -289,7 +300,7 @@ If a location/search context exists but there are no document cards to show, the
 
 The shared startup loading state shows:
 
-`Loading locations and boundaries...`
+`Loading locations...`
 
 ## Error State
 
@@ -299,11 +310,16 @@ contextual messages by failure scope instead of one generic message
 
 ## Performance Notes
 
-Current implementation realities to preserve during optimization work:
+Current implementation realities:
 
 - startup no longer waits on boundaries payload
-- default boundaries request uses full-detail default (`GET /api/map/boundaries?lite=1&rank_filter=default`)
-- map movement currently causes frequent viewport-driven recomputation
+- normal-view pan/zoom/hover/click runs on baked geometry tiles
+- explicit selected/highlighted polygon loading remains a separate live API path
+- ordinary pan/zoom should not trigger broad live `/api/map/boundaries` requests
+- selection/highlight changes should trigger explicit polygon fetches only
+- once baked base geometry is ready, background preload progressively requests remaining baked tiles for the active precision mode
+- preload is throttled (low concurrency) and pauses during active viewport movement
+- preload resumes after interaction settles, preserving smooth pan/zoom behavior
 - PDF thumbnails are generated client-side from PDF URLs
 
 ## Accessibility

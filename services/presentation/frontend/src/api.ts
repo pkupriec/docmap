@@ -1,6 +1,8 @@
 import type {
   BoundaryCollection,
   BoundariesRequestOptions,
+  BakedManifest,
+  BakedTileIndex,
   DocumentCard,
   DocumentLocation,
   Location,
@@ -26,10 +28,43 @@ export function fetchBoundaries(options?: BoundariesRequestOptions): Promise<Bou
   if (options?.rank_filter) {
     params.set("rank_filter", options.rank_filter);
   }
-  if (options?.geometry_detail) {
-    params.set("geometry_detail", options.geometry_detail);
+  if (options?.ranks && options.ranks.length > 0) {
+    params.set("ranks", options.ranks.join(","));
+  }
+  if (options?.chunk_ids && options.chunk_ids.length > 0) {
+    params.set("chunk_ids", options.chunk_ids.join(","));
+  }
+  if (options?.viewport_bucket) {
+    params.set("viewport_bucket", options.viewport_bucket);
+  }
+  if (options?.bbox) {
+    params.set("bbox", options.bbox.join(","));
+  }
+  if (options?.selected_location_id) {
+    params.set("selected_location_id", options.selected_location_id);
+  }
+  if (options?.highlighted_location_ids && options.highlighted_location_ids.length > 0) {
+    params.set("highlighted_location_ids", options.highlighted_location_ids.join(","));
   }
   return getJson<BoundaryCollection>(`/api/map/boundaries?${params.toString()}`);
+}
+
+export function fetchBakedManifest(mode?: string): Promise<BakedManifest> {
+  const params = new URLSearchParams();
+  if (mode) {
+    params.set("mode", mode);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return getJson<BakedManifest>(`/api/map/baked/manifest${suffix}`);
+}
+
+export function fetchBakedTileIndex(mode?: string): Promise<BakedTileIndex> {
+  const params = new URLSearchParams();
+  if (mode) {
+    params.set("mode", mode);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return getJson<BakedTileIndex>(`/api/map/baked/tile-index${suffix}`);
 }
 
 export function fetchLocationDocuments(

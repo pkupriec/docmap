@@ -63,7 +63,7 @@ services:
       - "8000:8000"
 
   control-ui:
-    image: node:20
+    image: node:20-bookworm@sha256:8789e1e0752d81088a085689c04fdb7a5b16e8102e353118a4b049bbf05db8ac
     container_name: docmap-control-ui
     depends_on:
       - app

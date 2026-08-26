@@ -53,6 +53,25 @@ body,
   gap: 8px;
 }
 
+.precision-control {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2d4760;
+}
+
+.precision-control select {
+  width: 100%;
+  border: 1px solid #9db6d4;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1a2f45;
+  padding: 7px 9px;
+  font-weight: 500;
+}
+
 .collapse-toggle {
   width: 100%;
   border: 0;
@@ -145,7 +164,8 @@ button {
 
 button:focus-visible,
 a:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 2px solid #fdc43d;
   outline-offset: 2px;
 }
@@ -352,6 +372,7 @@ input:focus-visible {
   display: flex;
   align-items: center;
   justify-content: center;
+  pointer-events: none;
 }
 
 .pdf-modal {
@@ -362,6 +383,7 @@ input:focus-visible {
   display: grid;
   grid-template-rows: auto 1fr;
   overflow: hidden;
+  pointer-events: auto;
 }
 
 .pdf-close {

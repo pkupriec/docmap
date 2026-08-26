@@ -28,6 +28,7 @@ def test_rebuild_analytics_orchestrates_builders(monkeypatch) -> None:
     monkeypatch.setattr(service, "build_bi_document_locations", lambda c: 12)
     monkeypatch.setattr(service, "build_bi_location_hierarchy", lambda c: 7)
     monkeypatch.setattr(service, "build_admin_boundaries_source", lambda c: 200)
+    monkeypatch.setattr(service, "build_presentation_baked_geometry", lambda c, **kwargs: 88)
     monkeypatch.setattr(
         service,
         "build_admin_boundaries_asset",
@@ -43,6 +44,7 @@ def test_rebuild_analytics_orchestrates_builders(monkeypatch) -> None:
         "bi_location_hierarchy": 7,
         "admin_boundaries_source": 200,
         "admin_boundaries": 3,
+        "presentation_baked_geometry": 88,
     }
     assert len(conns) == len(service.ANALYTICS_STEP_NAMES)
     assert all(conn.committed for conn in conns)
@@ -174,6 +176,13 @@ def test_rebuild_analytics_reports_admin_boundaries_detail_progress(monkeypatch)
     monkeypatch.setattr(service, "build_bi_document_locations", lambda c: 1)
     monkeypatch.setattr(service, "build_bi_location_hierarchy", lambda c: 1)
     monkeypatch.setattr(service, "build_admin_boundaries_source", lambda c: 1)
+    def _build_presentation_baked_geometry(_conn, *, on_progress=None):
+        if on_progress:
+            on_progress(0, 10)
+            on_progress(10, 10)
+        return 1
+
+    monkeypatch.setattr(service, "build_presentation_baked_geometry", _build_presentation_baked_geometry)
 
     def _build_admin_boundaries(_conn, *, on_target_progress=None, **_kwargs):
         if on_target_progress:
@@ -189,3 +198,5 @@ def test_rebuild_analytics_reports_admin_boundaries_detail_progress(monkeypatch)
     assert stats["admin_boundaries"] == 2
     assert ("admin_boundaries", 0, 4) in detail_events
     assert ("admin_boundaries", 4, 4) in detail_events
+    assert ("presentation_baked_geometry", 0, 10) in detail_events
+    assert ("presentation_baked_geometry", 10, 10) in detail_events

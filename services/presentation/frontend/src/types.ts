@@ -5,6 +5,8 @@ export type LocationRank =
   | "country"
   | "continent"
   | "ocean"
+  | "national_park"
+  | "desert"
   | "unknown";
 
 export type Location = {
@@ -88,7 +90,34 @@ export type BoundaryCollection = {
 export type BoundariesRequestOptions = {
   lite?: boolean;
   rank_filter?: "default" | "all";
-  geometry_detail?: "low" | "full";
+  ranks?: string[];
+  chunk_ids?: string[];
+  viewport_bucket?: string;
+  bbox?: [number, number, number, number];
+  selected_location_id?: string | null;
+  highlighted_location_ids?: string[];
+};
+
+export type BakedManifest = {
+  schema_version: string;
+  version: string;
+  mode: string;
+  default_mode: string;
+  available_modes: string[];
+  zoom_min: number;
+  zoom_max: number;
+  tile_format: string;
+  tolerance_by_zoom_band: Record<string, number>;
+  tile_url_template: string;
+  mode_path: string;
+  manifest_path: string;
+};
+
+export type BakedTileIndex = {
+  version: string;
+  mode: string;
+  tile_count: number;
+  tiles: string[];
 };
 
 export type MapViewport = {

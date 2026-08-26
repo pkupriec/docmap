@@ -21,6 +21,21 @@ Stop:
 - `docker compose -f infra/docker-compose.yml logs --tail=200 app`
 - `docker compose -f infra/docker-compose.yml logs --tail=200 presentation`
 
+Performance-focused presentation logs:
+- `presentation.api_request` for endpoint timing/payload size on:
+  - `/api/map/locations`
+  - `/api/map/boundaries`
+  - `/api/map/location/{location_id}/documents`
+  - `/api/map/document/{document_id}/locations`
+  - `/api/search`
+- repository timing logs:
+  - `presentation.locations_repo_fetch`
+  - `presentation.boundaries_repo_fetch`
+  - `presentation.resolve_location_for_documents`
+  - `presentation.location_documents_repo_fetch`
+  - `presentation.document_locations_repo_fetch`
+  - `presentation.search_repo_fetch`
+
 ## Control API Operations
 
 - `POST /api/runs`
@@ -58,6 +73,62 @@ UI behavior:
 - `GET /api/map/overlays/density`
 - `GET /api/search`
 - `GET /healthz`
+
+## Presentation Hot-Path Index Audit
+
+Present and in active runtime use:
+- `idx_bi_admin_boundaries_rank`
+- `idx_bi_admin_boundaries_lat_bounds`
+- `idx_bi_admin_boundaries_lon_bounds`
+- `idx_bi_document_locations_location`
+- `idx_bi_document_locations_location_document`
+- `idx_bi_location_hierarchy_ancestor_depth`
+- `idx_bi_location_hierarchy_descendant_depth`
+- primary keys on `bi_documents`, `bi_locations`, and `bi_document_locations`
+
+Known missing or weak for current hot paths:
+- no canonical search-support indexes for `LOWER(...) LIKE` on:
+  - `bi_documents.canonical_number`
+  - `bi_locations.normalized_location`
+  - `bi_locations.city`
+  - `bi_locations.region`
+  - `bi_locations.country`
+- no canonical presentation-order index for the startup `bi_locations` read ordered by `document_count DESC, normalized_location ASC, location_id ASC`
+- no canonical document-first helper index for `/api/map/document/{document_id}/locations` ordering by `mention_count DESC`
+
+These are audit findings only for Phase A. Search and lookup index hardening stays in later remediation phases.
+
+## Admin Boundaries Rebuild
+
+Use the dedicated analytics script when boundary matching or geometry selection changes and you need a reproducible refresh of `bi_admin_boundaries`.
+
+Rebuild source dataset + DB boundaries:
+`docker compose -f infra/docker-compose.yml exec -T app python -m services.analytics.scripts.rebuild_admin_boundaries`
+
+If only boundary matching/selection logic changed and the source dataset itself does not need refresh, reuse the existing source file:
+`docker compose -f infra/docker-compose.yml exec -T app sh -lc "DOCMAP_ADMIN_BOUNDARIES_REFRESH_SOURCE=0 python -m services.analytics.scripts.rebuild_admin_boundaries"`
+
+After rebuild, restart presentation to clear its in-memory boundaries cache:
+`docker compose -f infra/docker-compose.yml restart presentation`
+
+Expected outputs:
+- `services/analytics/assets/admin_boundaries_source.geojson` refreshed from source inputs
+- `services/analytics/assets/admin_boundaries.geojson` rewritten from current DB targets
+- `services/analytics/assets/admin_boundaries.coverage.json` rewritten
+- `services/analytics/assets/presentation_geometry/current.json` rewritten
+- `services/analytics/assets/presentation_geometry/{version}/manifest.json` written
+- `services/analytics/assets/presentation_geometry/{version}/{mode}/z/x/y.mvt` written for:
+  - `full_precise`
+  - `balanced_precise`
+  - `simplified`
+  - `primitive`
+- `bi_admin_boundaries` refreshed without manual SQL or ad hoc DB patches
+
+If an existing DB was built before a generic-ocean merge fix landed and you need a deterministic backfill without a full boundaries rebuild, run:
+`docker compose -f infra/docker-compose.yml exec -T app python -m services.analytics.scripts.backfill_generic_ocean_boundaries`
+
+Then restart presentation:
+`docker compose -f infra/docker-compose.yml restart presentation`
 
 ## Canonical Dictionary Refresh
 

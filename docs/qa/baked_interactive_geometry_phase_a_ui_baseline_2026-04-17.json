@@ -1,0 +1,50 @@
+{
+  "baseline": {
+    "first_meaningful_render_ms": 86.4,
+    "boundaries_ready_ms": 37799.7,
+    "request_count": 54,
+    "response_content_length_bytes": 44535920
+  },
+  "scenarios": {
+    "low_zoom_pan": {
+      "elapsed_ms": 716.24,
+      "request_count": 5,
+      "response_content_length_bytes": 0,
+      "task_duration_delta_ms": 519.82,
+      "script_duration_delta_ms": 515.64,
+      "heap_used_delta_mb": 16.094,
+      "heap_used_mb_after": 337.533,
+      "nodes_after": 114
+    },
+    "regional_pan": {
+      "elapsed_ms": 104326.48,
+      "request_count": 40,
+      "response_content_length_bytes": 50842842,
+      "task_duration_delta_ms": 109454.39,
+      "script_duration_delta_ms": 14801.46,
+      "heap_used_delta_mb": 279.987,
+      "heap_used_mb_after": 617.533,
+      "nodes_after": 114
+    },
+    "hover_click_select": {
+      "elapsed_ms": 6418.82,
+      "request_count": 2,
+      "response_content_length_bytes": 52177,
+      "task_duration_delta_ms": 6416.72,
+      "script_duration_delta_ms": 724.94,
+      "heap_used_delta_mb": 56.667,
+      "heap_used_mb_after": 641.128,
+      "nodes_after": 1173
+    },
+    "search_highlight": {
+      "elapsed_ms": 13796.5,
+      "request_count": 6,
+      "response_content_length_bytes": 7459857,
+      "task_duration_delta_ms": 13706.79,
+      "script_duration_delta_ms": 2012.25,
+      "heap_used_delta_mb": -165.716,
+      "heap_used_mb_after": 475.42,
+      "nodes_after": 166
+    }
+  }
+}

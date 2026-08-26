@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -61,6 +62,98 @@ def _wait_for_db_ready(max_wait_seconds: int = 30, interval_seconds: float = 1.0
             time.sleep(interval_seconds)
     if last_error is not None:
         raise last_error
+
+
+def _iter_geometry_positions(geometry: object):
+    if not isinstance(geometry, dict):
+        return
+    geometry_type = geometry.get("type")
+    coordinates = geometry.get("coordinates")
+    if geometry_type == "Polygon" and isinstance(coordinates, list):
+        for ring in coordinates:
+            if not isinstance(ring, list):
+                continue
+            for point in ring:
+                if (
+                    isinstance(point, list)
+                    and len(point) >= 2
+                    and isinstance(point[0], (int, float))
+                    and isinstance(point[1], (int, float))
+                ):
+                    yield float(point[0]), float(point[1])
+    if geometry_type == "MultiPolygon" and isinstance(coordinates, list):
+        for polygon in coordinates:
+            if not isinstance(polygon, list):
+                continue
+            for ring in polygon:
+                if not isinstance(ring, list):
+                    continue
+                for point in ring:
+                    if (
+                        isinstance(point, list)
+                        and len(point) >= 2
+                        and isinstance(point[0], (int, float))
+                        and isinstance(point[1], (int, float))
+                    ):
+                        yield float(point[0]), float(point[1])
+
+
+def _feature_bounds_from_payload(payload: object) -> tuple[float, float, float, float] | None:
+    if isinstance(payload, dict):
+        parsed = payload
+    elif isinstance(payload, (str, bytes, bytearray)):
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+    else:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    positions = list(_iter_geometry_positions(parsed.get("geometry")))
+    if not positions:
+        return None
+    longitudes = [lon for lon, _ in positions]
+    latitudes = [lat for _, lat in positions]
+    return (min(longitudes), min(latitudes), max(longitudes), max(latitudes))
+
+
+def _backfill_boundary_envelopes() -> None:
+    with get_connection() as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT location_id::text, feature_json
+                FROM bi_admin_boundaries
+                WHERE
+                    min_lon IS NULL
+                    OR min_lat IS NULL
+                    OR max_lon IS NULL
+                    OR max_lat IS NULL
+                ORDER BY location_id ASC
+                """
+            )
+            rows = cur.fetchall()
+            updates: list[tuple[float, float, float, float, str]] = []
+            for location_id, payload in rows:
+                bounds = _feature_bounds_from_payload(payload)
+                if bounds is None:
+                    continue
+                updates.append((*bounds, str(location_id)))
+            if updates:
+                cur.executemany(
+                    """
+                    UPDATE bi_admin_boundaries
+                    SET
+                        min_lon = %s,
+                        min_lat = %s,
+                        max_lon = %s,
+                        max_lat = %s
+                    WHERE location_id = %s::uuid
+                    """,
+                    updates,
+                )
 
 
 def _apply_runtime_schema_patches() -> None:
@@ -322,8 +415,36 @@ def _apply_runtime_schema_patches() -> None:
                     location_id UUID PRIMARY KEY REFERENCES geo_locations(id),
                     location_rank TEXT NOT NULL,
                     feature_json JSONB NOT NULL,
+                    min_lon DOUBLE PRECISION,
+                    min_lat DOUBLE PRECISION,
+                    max_lon DOUBLE PRECISION,
+                    max_lat DOUBLE PRECISION,
                     updated_at TIMESTAMP NOT NULL DEFAULT now()
                 )
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_admin_boundaries
+                ADD COLUMN IF NOT EXISTS min_lon DOUBLE PRECISION
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_admin_boundaries
+                ADD COLUMN IF NOT EXISTS min_lat DOUBLE PRECISION
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_admin_boundaries
+                ADD COLUMN IF NOT EXISTS max_lon DOUBLE PRECISION
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_admin_boundaries
+                ADD COLUMN IF NOT EXISTS max_lat DOUBLE PRECISION
                 """
             )
             cur.execute(
@@ -332,6 +453,19 @@ def _apply_runtime_schema_patches() -> None:
                 ON bi_admin_boundaries(location_rank)
                 """
             )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bi_admin_boundaries_lat_bounds
+                ON bi_admin_boundaries(min_lat, max_lat)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bi_admin_boundaries_lon_bounds
+                ON bi_admin_boundaries(min_lon, max_lon)
+                """
+            )
+    _backfill_boundary_envelopes()
 
 
 def run_startup_migrations() -> None:

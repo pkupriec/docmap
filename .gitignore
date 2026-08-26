@@ -70,6 +70,7 @@ node_modules/
 ui/node_modules/
 ui/dist/
 ui/.vite/
+services/analytics/assets/presentation_geometry/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

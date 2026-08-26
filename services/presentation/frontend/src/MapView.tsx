@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import { GeoJsonLayer, ScatterplotLayer } from "@deck.gl/layers";
@@ -10,7 +10,43 @@ type FocusCoordinate = {
   latitude: number;
   longitude: number;
 };
-type CoordinatePair = [number, number];
+
+type BakedStatus = "waiting_viewport" | "loading" | "ready" | "error";
+
+type PointRecord = {
+  locationId: string;
+  rank: LocationRank;
+  longitude: number;
+  latitude: number;
+  documentCount: number;
+};
+
+type Props = {
+  locations: Location[];
+  explicitBoundaries: BoundaryCollection;
+  bakedTileUrlTemplate: string | null;
+  selectedLocationId: string | null;
+  highlightedLocationIds: string[];
+  onHoverLocation: (locationId: string | null) => void;
+  onClickLocation: (locationId: string) => void;
+  onEmptyMapClick: () => void;
+  onViewportChange: (viewport: MapViewport) => void;
+  onProjectorChange: (projector: ((longitude: number, latitude: number) => ScreenPoint) | null) => void;
+  onBakedStatusChange: (status: BakedStatus) => void;
+  focusCoordinates: FocusCoordinate[];
+};
+
+const INITIAL_VIEW_STATE = {
+  longitude: 12,
+  latitude: 34,
+  zoom: 1.4,
+};
+
+const BAKED_SOURCE_ID = "baked-boundaries-source";
+const BAKED_LAYER_FILL_ID = "baked-boundaries-fill";
+const BAKED_LAYER_LINE_ID = "baked-boundaries-line";
+const BAKED_LAYER_HIGHLIGHT_ID = "baked-boundaries-highlight";
+const BAKED_LAYER_SELECTED_ID = "baked-boundaries-selected";
 
 function isFiniteCoordinate(latitude: number, longitude: number): boolean {
   return (
@@ -22,168 +58,6 @@ function isFiniteCoordinate(latitude: number, longitude: number): boolean {
     longitude <= 180
   );
 }
-
-function canonicalizeBoundaryAlias(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function splitBoundaryAliasVariants(value: string): string[] {
-  const canonical = canonicalizeBoundaryAlias(value);
-  if (!canonical) {
-    return [];
-  }
-  const variants = new Set<string>([canonical]);
-  for (const part of canonical.split(",")) {
-    const trimmed = part.trim();
-    if (trimmed) {
-      variants.add(trimmed);
-    }
-  }
-  return Array.from(variants);
-}
-
-function collectBoundaryAliases(properties: BoundaryCollection["features"][number]["properties"]): string[] {
-  const collected = new Set<string>();
-  const pushValue = (value: string | null | undefined): void => {
-    for (const normalized of splitBoundaryAliasVariants(String(value ?? ""))) {
-      collected.add(normalized);
-    }
-  };
-  const pushValues = (values: string[] | null | undefined): void => {
-    for (const value of values ?? []) {
-      pushValue(value);
-    }
-  };
-
-  pushValue(properties.location_name);
-  pushValue(properties.country_name);
-  pushValue(properties.region_name);
-  pushValues(properties.aliases);
-  pushValues(properties.safe_aliases);
-  pushValues(properties.country_aliases);
-  pushValues(properties.region_aliases);
-
-  return Array.from(collected);
-}
-
-function pointInRing(lon: number, lat: number, ring: number[][]): boolean {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const xi = ring[i][0];
-    const yi = ring[i][1];
-    const xj = ring[j][0];
-    const yj = ring[j][1];
-    const intersects = yi > lat !== yj > lat && lon < ((xj - xi) * (lat - yi)) / (yj - yi || Number.EPSILON) + xi;
-    if (intersects) {
-      inside = !inside;
-    }
-  }
-  return inside;
-}
-
-function pointInPolygonGeometry(
-  lon: number,
-  lat: number,
-  geometry: PolygonRecord["geometry"],
-): boolean {
-  if (geometry.type === "Polygon") {
-    const rings = geometry.coordinates as number[][][];
-    if (rings.length === 0 || !pointInRing(lon, lat, rings[0])) {
-      return false;
-    }
-    for (let i = 1; i < rings.length; i += 1) {
-      if (pointInRing(lon, lat, rings[i])) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  const polygons = geometry.coordinates as number[][][][];
-  for (const rings of polygons) {
-    if (rings.length === 0 || !pointInRing(lon, lat, rings[0])) {
-      continue;
-    }
-    let insideHole = false;
-    for (let i = 1; i < rings.length; i += 1) {
-      if (pointInRing(lon, lat, rings[i])) {
-        insideHole = true;
-        break;
-      }
-    }
-    if (!insideHole) {
-      return true;
-    }
-  }
-  return false;
-}
-
-type PolygonRecord = {
-  type: "Feature";
-  properties: {
-    location_id: string;
-    location_rank: LocationRank;
-  };
-  geometry: {
-    type: "Polygon" | "MultiPolygon";
-    coordinates: number[][][] | number[][][][];
-  };
-};
-
-type PointRecord = {
-  locationId: string;
-  rank: LocationRank;
-  longitude: number;
-  latitude: number;
-  documentCount: number;
-  boundaryUnavailable: boolean;
-};
-
-type Props = {
-  locations: Location[];
-  boundaries: BoundaryCollection;
-  selectedLocationId: string | null;
-  highlightedLocationIds: string[];
-  onHoverLocation: (locationId: string | null) => void;
-  onClickLocation: (locationId: string) => void;
-  onEmptyMapClick: () => void;
-  onViewportChange: (viewport: MapViewport) => void;
-  onProjectorChange: (projector: ((longitude: number, latitude: number) => ScreenPoint) | null) => void;
-  focusCoordinates: FocusCoordinate[];
-};
-
-const INITIAL_VIEW_STATE = {
-  longitude: 12,
-  latitude: 34,
-  zoom: 1.4,
-};
-
-const CITY_POLYGON_ZOOM_THRESHOLD = 3.2;
-const ALWAYS_POLYGON_RANKS: ReadonlySet<LocationRank> = new Set([
-  "admin_region",
-  "region",
-  "country",
-  "continent",
-  "ocean",
-]);
-const POLYGON_PICK_PRIORITY: Record<LocationRank, number> = {
-  ocean: 0,
-  continent: 1,
-  country: 2,
-  admin_region: 3,
-  region: 3,
-  city: 4,
-  unknown: 2,
-};
-const CLICK_RANK_PRIORITY: Record<LocationRank, number> = {
-  unknown: 0,
-  ocean: 1,
-  continent: 2,
-  country: 3,
-  admin_region: 4,
-  region: 4,
-  city: 5,
-};
 
 function normalizeLocationRank(location: Location): LocationRank {
   const rawRank = (location.location_rank ?? "").toLowerCase();
@@ -216,11 +90,13 @@ function normalizeLocationRank(location: Location): LocationRank {
     rawRank === "country" ||
     rawRank === "continent" ||
     rawRank === "ocean" ||
+    rawRank === "national_park" ||
+    rawRank === "desert" ||
     rawRank === "unknown"
   ) {
     return rawRank;
   }
-  return "city";
+  return "unknown";
 }
 
 function getViewport(map: maplibregl.Map): MapViewport {
@@ -283,9 +159,28 @@ class ZoomLevelControl implements maplibregl.IControl {
   }
 }
 
+function _emptyFilter() {
+  return ["==", ["get", "location_id"], "__none__"] as maplibregl.FilterSpecification;
+}
+
+function _inFilter(ids: string[]) {
+  if (ids.length === 0) {
+    return _emptyFilter();
+  }
+  return ["in", ["get", "location_id"], ["literal", ids]] as maplibregl.FilterSpecification;
+}
+
+function _selectedFilter(id: string | null) {
+  if (!id) {
+    return _emptyFilter();
+  }
+  return ["==", ["get", "location_id"], id] as maplibregl.FilterSpecification;
+}
+
 export function MapView({
   locations,
-  boundaries,
+  explicitBoundaries,
+  bakedTileUrlTemplate,
   selectedLocationId,
   highlightedLocationIds,
   onHoverLocation,
@@ -293,56 +188,113 @@ export function MapView({
   onEmptyMapClick,
   onViewportChange,
   onProjectorChange,
+  onBakedStatusChange,
   focusCoordinates,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const overlayRef = useRef<MapboxOverlay | null>(null);
   const lastDeckClickTsRef = useRef(0);
+  const lastBakedClickTsRef = useRef(0);
   const lastFocusKeyRef = useRef<string>("");
   const viewportFrameRef = useRef<number | null>(null);
   const pulseTimerRef = useRef<number | null>(null);
-  const [cityPolygonMode, setCityPolygonMode] = useState(
-    INITIAL_VIEW_STATE.zoom >= CITY_POLYGON_ZOOM_THRESHOLD,
-  );
+  const bakedSourceLoadedRef = useRef(false);
   const [pulsePhase, setPulsePhase] = useState(0);
 
-  const { boundaryByLocationId, boundaryByRankedAlias } = useMemo(() => {
-    const byLocationId = new Map<
-      string,
-      { geometryType: "Polygon" | "MultiPolygon"; coordinates: number[][][] | number[][][][] }
-    >();
-    const byRankedAlias = new Map<
-      string,
-      { geometryType: "Polygon" | "MultiPolygon"; coordinates: number[][][] | number[][][][] }
-    >();
-    const rankedAliasKey = (rank: string, alias: string): string => `${rank}:${alias}`;
+  const pointRecords = useMemo<PointRecord[]>(
+    () =>
+      locations
+        .filter((location) => isFiniteCoordinate(location.latitude, location.longitude))
+        .map((location) => ({
+          locationId: location.location_id,
+          rank: normalizeLocationRank(location),
+          latitude: location.latitude,
+          longitude: location.longitude,
+          documentCount: location.document_count,
+        })),
+    [locations],
+  );
 
-    for (const feature of boundaries.features) {
-      if (feature.geometry.type !== "Polygon" && feature.geometry.type !== "MultiPolygon") {
-        continue;
-      }
-      const geometry = {
-        geometryType: feature.geometry.type as "Polygon" | "MultiPolygon",
-        coordinates: feature.geometry.coordinates as number[][][] | number[][][][],
-      };
-      const rank = String(feature.properties.location_rank ?? "unknown").toLowerCase();
-      const normalizedRank = rank === "region" ? "admin_region" : rank;
-      const locationId = String(feature.properties.location_id ?? "").trim();
+  const highlightedPoints = useMemo(
+    () =>
+      pointRecords
+        .filter((item) => highlightedLocationIds.includes(item.locationId))
+        .map((item) => ({
+          longitude: item.longitude,
+          latitude: item.latitude,
+          locationId: item.locationId,
+        })),
+    [highlightedLocationIds, pointRecords],
+  );
 
-      if (locationId) {
-        byLocationId.set(locationId, geometry);
-      }
-      for (const alias of collectBoundaryAliases(feature.properties)) {
-        byRankedAlias.set(rankedAliasKey(normalizedRank, alias), geometry);
-      }
+  const upsertBakedSource = useCallback((map: maplibregl.Map, template: string) => {
+    if (map.getLayer(BAKED_LAYER_SELECTED_ID)) {
+      map.removeLayer(BAKED_LAYER_SELECTED_ID);
+    }
+    if (map.getLayer(BAKED_LAYER_HIGHLIGHT_ID)) {
+      map.removeLayer(BAKED_LAYER_HIGHLIGHT_ID);
+    }
+    if (map.getLayer(BAKED_LAYER_LINE_ID)) {
+      map.removeLayer(BAKED_LAYER_LINE_ID);
+    }
+    if (map.getLayer(BAKED_LAYER_FILL_ID)) {
+      map.removeLayer(BAKED_LAYER_FILL_ID);
+    }
+    if (map.getSource(BAKED_SOURCE_ID)) {
+      map.removeSource(BAKED_SOURCE_ID);
     }
 
-    return {
-      boundaryByLocationId: byLocationId,
-      boundaryByRankedAlias: byRankedAlias,
-    };
-  }, [boundaries]);
+    map.addSource(BAKED_SOURCE_ID, {
+      type: "vector",
+      tiles: [template],
+      minzoom: 0,
+      maxzoom: 8,
+    });
+    map.addLayer({
+      id: BAKED_LAYER_FILL_ID,
+      type: "fill",
+      source: BAKED_SOURCE_ID,
+      "source-layer": "boundaries",
+      paint: {
+        "fill-color": "#2c7ac0",
+        "fill-opacity": 0.22,
+      },
+    });
+    map.addLayer({
+      id: BAKED_LAYER_LINE_ID,
+      type: "line",
+      source: BAKED_SOURCE_ID,
+      "source-layer": "boundaries",
+      paint: {
+        "line-color": "#2c608c",
+        "line-width": 1.2,
+        "line-opacity": 0.6,
+      },
+    });
+    map.addLayer({
+      id: BAKED_LAYER_HIGHLIGHT_ID,
+      type: "fill",
+      source: BAKED_SOURCE_ID,
+      "source-layer": "boundaries",
+      filter: _emptyFilter(),
+      paint: {
+        "fill-color": "#f5bf2f",
+        "fill-opacity": 0.4,
+      },
+    });
+    map.addLayer({
+      id: BAKED_LAYER_SELECTED_ID,
+      type: "fill",
+      source: BAKED_SOURCE_ID,
+      "source-layer": "boundaries",
+      filter: _emptyFilter(),
+      paint: {
+        "fill-color": "#d8462d",
+        "fill-opacity": 0.48,
+      },
+    });
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
@@ -376,20 +328,15 @@ export function MapView({
     };
 
     map.on("move", scheduleViewportChange);
-    map.on("zoom", () => {
-      const nextMode = map.getZoom() >= CITY_POLYGON_ZOOM_THRESHOLD;
-      setCityPolygonMode((current) => (current === nextMode ? current : nextMode));
-    });
-
     map.on("click", () => {
-      if (Date.now() - lastDeckClickTsRef.current < 90) {
+      const now = Date.now();
+      if (now - lastDeckClickTsRef.current < 90 || now - lastBakedClickTsRef.current < 90) {
         return;
       }
       onEmptyMapClick();
     });
 
     map.on("load", () => {
-      setCityPolygonMode(map.getZoom() >= CITY_POLYGON_ZOOM_THRESHOLD);
       emitViewport();
       onProjectorChange((longitude, latitude) => {
         if (!isFiniteCoordinate(latitude, longitude)) {
@@ -430,6 +377,68 @@ export function MapView({
   }, [onEmptyMapClick, onProjectorChange, onViewportChange]);
 
   useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) {
+      return;
+    }
+    if (!bakedTileUrlTemplate) {
+      onBakedStatusChange("error");
+      return;
+    }
+
+    bakedSourceLoadedRef.current = false;
+    onBakedStatusChange("loading");
+    upsertBakedSource(map, bakedTileUrlTemplate);
+
+    const onSourceData = (event: maplibregl.MapSourceDataEvent): void => {
+      if (event.sourceId !== BAKED_SOURCE_ID || !event.isSourceLoaded || bakedSourceLoadedRef.current) {
+        return;
+      }
+      bakedSourceLoadedRef.current = true;
+      onBakedStatusChange("ready");
+    };
+    const onMouseMove = (event: maplibregl.MapMouseEvent & maplibregl.EventData): void => {
+      const feature = event.features?.[0] as { properties?: Record<string, unknown> } | undefined;
+      const locationId = String(feature?.properties?.location_id ?? "").trim();
+      onHoverLocation(locationId || null);
+    };
+    const onMouseLeave = (): void => {
+      onHoverLocation(null);
+    };
+    const onClick = (event: maplibregl.MapMouseEvent & maplibregl.EventData): void => {
+      const feature = event.features?.[0] as { properties?: Record<string, unknown> } | undefined;
+      const locationId = String(feature?.properties?.location_id ?? "").trim();
+      if (!locationId) {
+        return;
+      }
+      lastBakedClickTsRef.current = Date.now();
+      onClickLocation(locationId);
+    };
+
+    map.on("sourcedata", onSourceData);
+    map.on("mousemove", BAKED_LAYER_FILL_ID, onMouseMove);
+    map.on("mouseleave", BAKED_LAYER_FILL_ID, onMouseLeave);
+    map.on("click", BAKED_LAYER_FILL_ID, onClick);
+    return () => {
+      map.off("sourcedata", onSourceData);
+      if (map.getLayer(BAKED_LAYER_FILL_ID)) {
+        map.off("mousemove", BAKED_LAYER_FILL_ID, onMouseMove);
+        map.off("mouseleave", BAKED_LAYER_FILL_ID, onMouseLeave);
+        map.off("click", BAKED_LAYER_FILL_ID, onClick);
+      }
+    };
+  }, [bakedTileUrlTemplate, onBakedStatusChange, onClickLocation, onHoverLocation, upsertBakedSource]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.getLayer(BAKED_LAYER_SELECTED_ID) || !map.getLayer(BAKED_LAYER_HIGHLIGHT_ID)) {
+      return;
+    }
+    map.setFilter(BAKED_LAYER_SELECTED_ID, _selectedFilter(selectedLocationId));
+    map.setFilter(BAKED_LAYER_HIGHLIGHT_ID, _inFilter(highlightedLocationIds));
+  }, [highlightedLocationIds, selectedLocationId]);
+
+  useEffect(() => {
     if (highlightedLocationIds.length === 0) {
       return;
     }
@@ -440,7 +449,6 @@ export function MapView({
     pulseTimerRef.current = window.setInterval(() => {
       setPulsePhase((phase) => (phase + 1) % 60);
     }, 50);
-
     const stopHandle = window.setTimeout(() => {
       if (pulseTimerRef.current !== null) {
         window.clearInterval(pulseTimerRef.current);
@@ -448,7 +456,6 @@ export function MapView({
       }
       setPulsePhase(0);
     }, 1400);
-
     return () => {
       window.clearTimeout(stopHandle);
     };
@@ -459,9 +466,7 @@ export function MapView({
     if (!map || focusCoordinates.length === 0) {
       return;
     }
-    const validCoordinates = focusCoordinates.filter((item) =>
-      isFiniteCoordinate(item.latitude, item.longitude),
-    );
+    const validCoordinates = focusCoordinates.filter((item) => isFiniteCoordinate(item.latitude, item.longitude));
     if (validCoordinates.length === 0) {
       return;
     }
@@ -478,7 +483,6 @@ export function MapView({
       .map((item) => `${item.latitude.toFixed(4)}:${item.longitude.toFixed(4)}`)
       .sort()
       .join("|");
-
     if (key === lastFocusKeyRef.current) {
       return;
     }
@@ -506,271 +510,34 @@ export function MapView({
     map.fitBounds(bounds, { padding: 80, duration: 500, maxZoom: 6.5 });
   }, [focusCoordinates]);
 
-  const highlightedSet = useMemo(() => new Set(highlightedLocationIds), [highlightedLocationIds]);
-  const locationMetaById = useMemo(() => {
-    const map = new Map<string, { rank: LocationRank; documentCount: number }>();
-    for (const location of locations) {
-      map.set(location.location_id, {
-        rank: normalizeLocationRank(location),
-        documentCount: location.document_count,
-      });
-    }
-    return map;
-  }, [locations]);
-
-  const pickPreferredLocationId = useCallback(
-    (primaryLocationId: string, x: number | null | undefined, y: number | null | undefined): string => {
-      const candidateIds = new Set<string>([primaryLocationId]);
-      const overlay = overlayRef.current as unknown as {
-        pickMultipleObjects?: (opts: { x: number; y: number; radius?: number; depth?: number }) => Array<{
-          object?: unknown;
-        }>;
-      } | null;
-      if (overlay?.pickMultipleObjects && typeof x === "number" && typeof y === "number") {
-        const picks = overlay.pickMultipleObjects({
-          x,
-          y,
-          radius: 20,
-          depth: 64,
-        });
-        for (const pick of picks) {
-          const object = pick.object as
-            | { locationId?: string; properties?: { location_id?: string } }
-            | undefined;
-          const pickedId = object?.locationId ?? object?.properties?.location_id;
-          if (pickedId) {
-            candidateIds.add(pickedId);
-          }
-        }
-      }
-
-      let bestId = primaryLocationId;
-      let bestScore = Number.NEGATIVE_INFINITY;
-      for (const candidateId of candidateIds) {
-        const meta = locationMetaById.get(candidateId);
-        if (!meta) {
-          continue;
-        }
-        const rankPriority = CLICK_RANK_PRIORITY[meta.rank] ?? 0;
-        const hasDocuments = meta.documentCount > 0 ? 1 : 0;
-        const score = hasDocuments * 10000 + rankPriority * 100 + Math.min(meta.documentCount, 99);
-        if (score > bestScore) {
-          bestScore = score;
-          bestId = candidateId;
-        }
-      }
-      return bestId;
-    },
-    [locationMetaById],
-  );
-
-  const { polygonRecords, pointRecords, highlightedPoints } = useMemo(() => {
-    const nextPolygons: PolygonRecord[] = [];
-    const nextPoints: PointRecord[] = [];
-    const nextHighlights: Array<{ longitude: number; latitude: number; locationId: string }> = [];
-    const rankedAliasKey = (rank: string, alias: string): string => `${rank}:${alias}`;
-
-    for (const location of locations) {
-      const rank = normalizeLocationRank(location);
-      const polygonById = boundaryByLocationId.get(location.location_id);
-      const polygonByAlias =
-        polygonById ??
-        splitBoundaryAliasVariants(location.name)
-          .map((alias) => boundaryByRankedAlias.get(rankedAliasKey(rank, alias)) ?? null)
-          .find((value) => value !== null) ??
-        null;
-
-      if (highlightedSet.has(location.location_id)) {
-        nextHighlights.push({
-          locationId: location.location_id,
-          latitude: location.latitude,
-          longitude: location.longitude,
-        });
-      }
-
-      if (!polygonByAlias) {
-        nextPoints.push({
-          locationId: location.location_id,
-          rank,
-          latitude: location.latitude,
-          longitude: location.longitude,
-          documentCount: location.document_count,
-          boundaryUnavailable: true,
-        });
-        continue;
-      }
-
-      if (rank === "city") {
-        if (!cityPolygonMode) {
-          nextPoints.push({
-            locationId: location.location_id,
-            rank,
-            latitude: location.latitude,
-            longitude: location.longitude,
-            documentCount: location.document_count,
-            boundaryUnavailable: false,
-          });
-        } else {
-          nextPolygons.push({
-            type: "Feature",
-            properties: {
-              location_id: location.location_id,
-              location_rank: rank,
-            },
-            geometry: {
-              type: polygonByAlias.geometryType,
-              coordinates: polygonByAlias.coordinates,
-            },
-          });
-        }
-        continue;
-      }
-
-      if (ALWAYS_POLYGON_RANKS.has(rank)) {
-        nextPolygons.push({
-          type: "Feature",
-          properties: {
-            location_id: location.location_id,
-            location_rank: rank,
-          },
-          geometry: {
-            type: polygonByAlias.geometryType,
-            coordinates: polygonByAlias.coordinates,
-          },
-        });
-        continue;
-      }
-
-      nextPoints.push({
-        locationId: location.location_id,
-        rank,
-        latitude: location.latitude,
-        longitude: location.longitude,
-        documentCount: location.document_count,
-        boundaryUnavailable: false,
-      });
-    }
-
-    nextPolygons.sort((a, b) => {
-      const rankA = a.properties.location_rank;
-      const rankB = b.properties.location_rank;
-      const priorityA = POLYGON_PICK_PRIORITY[rankA] ?? 0;
-      const priorityB = POLYGON_PICK_PRIORITY[rankB] ?? 0;
-      return priorityA - priorityB;
-    });
-
-    return {
-      polygonRecords: nextPolygons,
-      pointRecords: nextPoints,
-      highlightedPoints: nextHighlights,
-    };
-  }, [boundaryByLocationId, boundaryByRankedAlias, cityPolygonMode, highlightedSet, locations]);
-
-  const selectLocationForClick = useCallback(
-    (
-      primaryLocationId: string,
-      x: number | null | undefined,
-      y: number | null | undefined,
-      coordinate: CoordinatePair | null | undefined,
-    ): string => {
-      const primaryMeta = locationMetaById.get(primaryLocationId);
-      const primaryRankPriority = primaryMeta ? CLICK_RANK_PRIORITY[primaryMeta.rank] ?? 0 : 0;
-      const preferredByPicks = pickPreferredLocationId(primaryLocationId, x, y);
-
-      if (primaryRankPriority > CLICK_RANK_PRIORITY.continent || !coordinate) {
-        return preferredByPicks;
-      }
-
-      const [lon, lat] = coordinate;
-      if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
-        return preferredByPicks;
-      }
-
-      const polygonCandidates: string[] = [];
-      for (const polygon of polygonRecords) {
-        const locationId = polygon.properties.location_id;
-        const meta = locationMetaById.get(locationId);
-        if (!meta) {
-          continue;
-        }
-        const rankPriority = CLICK_RANK_PRIORITY[meta.rank] ?? 0;
-        if (rankPriority <= CLICK_RANK_PRIORITY.continent) {
-          continue;
-        }
-        if (pointInPolygonGeometry(lon, lat, polygon.geometry)) {
-          polygonCandidates.push(locationId);
-        }
-      }
-
-      if (polygonCandidates.length === 0) {
-        return preferredByPicks;
-      }
-
-      let bestId = preferredByPicks;
-      let bestScore = Number.NEGATIVE_INFINITY;
-      for (const candidateId of polygonCandidates) {
-        const meta = locationMetaById.get(candidateId);
-        if (!meta) {
-          continue;
-        }
-        const rankPriority = CLICK_RANK_PRIORITY[meta.rank] ?? 0;
-        const hasDocuments = meta.documentCount > 0 ? 1 : 0;
-        const score = hasDocuments * 10000 + rankPriority * 100 + Math.min(meta.documentCount, 99);
-        if (score > bestScore) {
-          bestScore = score;
-          bestId = candidateId;
-        }
-      }
-      return bestId;
-    },
-    [locationMetaById, pickPreferredLocationId, polygonRecords],
-  );
-
   useEffect(() => {
     const overlay = overlayRef.current;
-    if (!mapRef.current || !overlay) {
+    if (!overlay) {
       return;
     }
-
     const pulseFactor = 0.6 + Math.sin((pulsePhase / 60) * Math.PI * 2) * 0.4;
-
     const layers = [
-      new GeoJsonLayer<PolygonRecord>({
-        id: "locations-polygons",
-        data: polygonRecords,
+      new GeoJsonLayer({
+        id: "explicit-live-boundaries",
+        data: explicitBoundaries.features,
         pickable: true,
+        filled: false,
         stroked: true,
-        filled: true,
-        getFillColor: (feature) =>
-          feature.properties.location_id === selectedLocationId
-            ? [216, 70, 45, 170]
-            : [44, 122, 192, 72],
-        getLineColor: (feature) =>
-          feature.properties.location_id === selectedLocationId
-            ? [255, 255, 255, 245]
-            : [44, 96, 140, 160],
-        getLineWidth: (feature) => (feature.properties.location_id === selectedLocationId ? 3 : 1.5),
         lineWidthUnits: "pixels",
-        updateTriggers: {
-          getFillColor: [selectedLocationId],
-          getLineColor: [selectedLocationId],
-          getLineWidth: [selectedLocationId],
+        getLineWidth: 3,
+        getLineColor: [255, 255, 255, 245],
+        visible: explicitBoundaries.features.length > 0,
+        onHover: (info: PickingInfo<{ properties?: { location_id?: string } }>) => {
+          const locationId = String(info.object?.properties?.location_id ?? "").trim();
+          onHoverLocation(locationId || null);
         },
-        onHover: (info: PickingInfo<{ properties: { location_id: string } }>) => {
-          const locationId = info.object ? info.object.properties.location_id : null;
-          onHoverLocation(locationId);
-        },
-        onClick: (info: PickingInfo<{ properties: { location_id: string } }>) => {
-          if (!info.object) {
+        onClick: (info: PickingInfo<{ properties?: { location_id?: string } }>) => {
+          const locationId = String(info.object?.properties?.location_id ?? "").trim();
+          if (!locationId) {
             return;
           }
           lastDeckClickTsRef.current = Date.now();
-          const coordinate = Array.isArray(info.coordinate)
-            ? ([Number(info.coordinate[0]), Number(info.coordinate[1])] as CoordinatePair)
-            : null;
-          onClickLocation(
-            selectLocationForClick(info.object.properties.location_id, info.x, info.y, coordinate),
-          );
+          onClickLocation(locationId);
         },
       }),
       new ScatterplotLayer<PointRecord>({
@@ -787,32 +554,25 @@ export function MapView({
           d.locationId === selectedLocationId ? [255, 255, 255, 250] : [20, 32, 53, 120],
         lineWidthMinPixels: 1.5,
         stroked: true,
-        getFillColor: (d) => {
-          if (d.rank === "city") {
-            return d.locationId === selectedLocationId ? [216, 70, 45, 245] : [28, 92, 205, 215];
-          }
-          if (d.boundaryUnavailable) {
-            return d.locationId === selectedLocationId ? [216, 70, 45, 245] : [96, 157, 214, 212];
-          }
-          return d.locationId === selectedLocationId ? [216, 70, 45, 245] : [44, 122, 192, 205];
-        },
+        getFillColor: (d) =>
+          d.locationId === selectedLocationId
+            ? [216, 70, 45, 245]
+            : d.rank === "city"
+              ? [28, 92, 205, 215]
+              : [96, 157, 214, 205],
         updateTriggers: {
           getFillColor: [selectedLocationId],
           getLineColor: [selectedLocationId],
         },
         onHover: (info: PickingInfo<PointRecord>) => {
-          const locationId = info.object ? info.object.locationId : null;
-          onHoverLocation(locationId);
+          onHoverLocation(info.object?.locationId ?? null);
         },
         onClick: (info: PickingInfo<PointRecord>) => {
           if (!info.object) {
             return;
           }
           lastDeckClickTsRef.current = Date.now();
-          const coordinate = Array.isArray(info.coordinate)
-            ? ([Number(info.coordinate[0]), Number(info.coordinate[1])] as CoordinatePair)
-            : null;
-          onClickLocation(selectLocationForClick(info.object.locationId, info.x, info.y, coordinate));
+          onClickLocation(info.object.locationId);
         },
       }),
       new ScatterplotLayer<{ longitude: number; latitude: number; locationId: string }>({
@@ -833,20 +593,16 @@ export function MapView({
         },
       }),
     ];
-
     overlay.setProps({ layers });
   }, [
+    explicitBoundaries.features,
     highlightedPoints,
     onClickLocation,
     onHoverLocation,
-    pickPreferredLocationId,
     pointRecords,
-    polygonRecords,
-    selectLocationForClick,
     pulsePhase,
     selectedLocationId,
   ]);
 
   return <div className="map-canvas" ref={containerRef} />;
 }
-

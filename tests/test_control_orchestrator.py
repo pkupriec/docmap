@@ -257,6 +257,41 @@ class _StageRepo:
         return 1
 
 
+class _AnalyticsStageRepo(_StageRepo):
+    def __init__(self) -> None:
+        super().__init__()
+        self.progress_updates: list[dict[str, object]] = []
+
+    def upsert_progress(self, *args, **kwargs):
+        self.progress_updates.append(dict(kwargs))
+        return None
+
+
+def test_analytics_stage_reports_baked_geometry_detail_progress(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _AnalyticsStageRepo()
+    orchestrator = ControlOrchestrator(repository=repo)
+
+    def _fake_rebuild_analytics(*, on_step=None, on_detail=None, start_index=0):
+        assert start_index == 0
+        if on_detail:
+            on_detail("presentation_baked_geometry", 250, 1000)
+            on_detail("presentation_baked_geometry", 1000, 1000)
+        if on_step:
+            for step_name in orchestrator_module.ANALYTICS_STEP_NAMES:
+                on_step(step_name, 1)
+        return {step_name: 1 for step_name in orchestrator_module.ANALYTICS_STEP_NAMES}
+
+    monkeypatch.setattr(orchestrator_module, "rebuild_analytics", _fake_rebuild_analytics)
+    orchestrator._run_stage(1, "analytics", {"parameters_json": {"options": {}}})
+
+    assert any("presentation_baked_geometry 250/1000" in log for log in repo.logs)
+    assert any("presentation_baked_geometry 1000/1000" in log for log in repo.logs)
+    assert any(
+        update.get("current_item_label") == "presentation_baked_geometry 1000/1000"
+        for update in repo.progress_updates
+    )
+
+
 def test_crawl_single_document_forces_resnapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _StageRepo()
     orchestrator = ControlOrchestrator(repository=repo)

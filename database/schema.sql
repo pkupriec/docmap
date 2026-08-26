@@ -256,8 +256,18 @@ CREATE TABLE bi_admin_boundaries (
     location_id UUID PRIMARY KEY REFERENCES geo_locations(id),
     location_rank TEXT NOT NULL,
     feature_json JSONB NOT NULL,
+    min_lon DOUBLE PRECISION,
+    min_lat DOUBLE PRECISION,
+    max_lon DOUBLE PRECISION,
+    max_lat DOUBLE PRECISION,
     updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_bi_admin_boundaries_rank
 ON bi_admin_boundaries(location_rank);
+
+CREATE INDEX idx_bi_admin_boundaries_lat_bounds
+ON bi_admin_boundaries(min_lat, max_lat);
+
+CREATE INDEX idx_bi_admin_boundaries_lon_bounds
+ON bi_admin_boundaries(min_lon, max_lon);

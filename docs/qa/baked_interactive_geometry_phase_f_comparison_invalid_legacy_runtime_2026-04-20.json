@@ -1,0 +1,301 @@
+{
+  "summary": {
+    "first_useful_interaction_improvement_x": 0.964,
+    "pan_zoom_improvement_x": {
+      "low_zoom_elapsed_x": 0.06,
+      "regional_elapsed_x": 0.89,
+      "worst_of_pan_zoom_elapsed_x": 0.06
+    },
+    "hover_click_improvement_x": 0.85,
+    "search_highlight_improvement_x": 0.92,
+    "minimum_5x_met": false,
+    "stretch_20x_met": false
+  },
+  "detailed_comparison": {
+    "baseline": {
+      "baseline": {
+        "first_meaningful_render_ms": 86.4,
+        "boundaries_ready_ms": 37799.7,
+        "request_count": 54,
+        "response_content_length_bytes": 44535920
+      },
+      "scenarios": {
+        "low_zoom_pan": {
+          "elapsed_ms": 716.24,
+          "request_count": 5,
+          "response_content_length_bytes": 0,
+          "task_duration_delta_ms": 519.82,
+          "script_duration_delta_ms": 515.64,
+          "heap_used_delta_mb": 16.094,
+          "heap_used_mb_after": 337.533,
+          "nodes_after": 114
+        },
+        "regional_pan": {
+          "elapsed_ms": 104326.48,
+          "request_count": 40,
+          "response_content_length_bytes": 50842842,
+          "task_duration_delta_ms": 109454.39,
+          "script_duration_delta_ms": 14801.46,
+          "heap_used_delta_mb": 279.987,
+          "heap_used_mb_after": 617.533,
+          "nodes_after": 114
+        },
+        "hover_click_select": {
+          "elapsed_ms": 6418.82,
+          "request_count": 2,
+          "response_content_length_bytes": 52177,
+          "task_duration_delta_ms": 6416.72,
+          "script_duration_delta_ms": 724.94,
+          "heap_used_delta_mb": 56.667,
+          "heap_used_mb_after": 641.128,
+          "nodes_after": 1173
+        },
+        "search_highlight": {
+          "elapsed_ms": 13796.5,
+          "request_count": 6,
+          "response_content_length_bytes": 7459857,
+          "task_duration_delta_ms": 13706.79,
+          "script_duration_delta_ms": 2012.25,
+          "heap_used_delta_mb": -165.716,
+          "heap_used_mb_after": 475.42,
+          "nodes_after": 166
+        }
+      }
+    },
+    "current": {
+      "measured_at_utc": "2026-04-20T20:11:41.458277+00:00",
+      "base_url": "http://localhost:8080",
+      "baseline": {
+        "first_meaningful_render_ms": 88.3,
+        "boundaries_ready_ms": 39218.6,
+        "request_count": 54,
+        "api_request_count": 43,
+        "response_content_length_bytes": 44535920,
+        "response_decoded_body_bytes": 128318264
+      },
+      "scenarios": {
+        "low_zoom_pan": {
+          "elapsed_ms": 11970.15,
+          "request_count": 5,
+          "api_request_count": 5,
+          "response_content_length_bytes": 76658,
+          "response_decoded_body_bytes": 252854,
+          "task_duration_delta_ms": 11971.44,
+          "script_duration_delta_ms": 2303.33,
+          "heap_used_delta_mb": 22.079,
+          "heap_used_mb_after": 336.16,
+          "nodes_after": 114
+        },
+        "regional_pan": {
+          "elapsed_ms": 117213.58,
+          "request_count": 40,
+          "api_request_count": 40,
+          "response_content_length_bytes": 50766184,
+          "response_decoded_body_bytes": 131386508,
+          "task_duration_delta_ms": 122408.4,
+          "script_duration_delta_ms": 17901.29,
+          "heap_used_delta_mb": 232.191,
+          "heap_used_mb_after": 572.85,
+          "nodes_after": 114
+        },
+        "hover_click_select": {
+          "elapsed_ms": 7548.31,
+          "request_count": 2,
+          "api_request_count": 2,
+          "response_content_length_bytes": 52177,
+          "response_decoded_body_bytes": 157160,
+          "task_duration_delta_ms": 7549.46,
+          "script_duration_delta_ms": 1636.46,
+          "heap_used_delta_mb": -18.23,
+          "heap_used_mb_after": 542.619,
+          "nodes_after": 1169
+        },
+        "search_highlight": {
+          "elapsed_ms": 14994.93,
+          "request_count": 5,
+          "api_request_count": 3,
+          "response_content_length_bytes": 48814,
+          "response_decoded_body_bytes": 2887465,
+          "task_duration_delta_ms": 20739.15,
+          "script_duration_delta_ms": 2900.07,
+          "heap_used_delta_mb": -79.633,
+          "heap_used_mb_after": 469.563,
+          "nodes_after": 1161
+        }
+      }
+    },
+    "initial_load": {
+      "request_count_x": 1.0,
+      "api_request_count_x": null,
+      "content_length_bytes_x": 1.0,
+      "decoded_body_bytes_x": null
+    },
+    "scenarios": {
+      "hover_click_select": {
+        "before": {
+          "elapsed_ms": 6418.82,
+          "request_count": 2,
+          "response_content_length_bytes": 52177,
+          "task_duration_delta_ms": 6416.72,
+          "script_duration_delta_ms": 724.94,
+          "heap_used_delta_mb": 56.667,
+          "heap_used_mb_after": 641.128,
+          "nodes_after": 1173
+        },
+        "after": {
+          "elapsed_ms": 7548.31,
+          "request_count": 2,
+          "api_request_count": 2,
+          "response_content_length_bytes": 52177,
+          "response_decoded_body_bytes": 157160,
+          "task_duration_delta_ms": 7549.46,
+          "script_duration_delta_ms": 1636.46,
+          "heap_used_delta_mb": -18.23,
+          "heap_used_mb_after": 542.619,
+          "nodes_after": 1169
+        },
+        "improvement_x": {
+          "elapsed_ms": 0.85,
+          "request_count": 1.0,
+          "api_request_count": null,
+          "response_content_length_bytes": 1.0,
+          "response_decoded_body_bytes": null,
+          "task_duration_delta_ms": 0.85,
+          "script_duration_delta_ms": 0.443,
+          "heap_used_mb_after": 1.182
+        }
+      },
+      "low_zoom_pan": {
+        "before": {
+          "elapsed_ms": 716.24,
+          "request_count": 5,
+          "response_content_length_bytes": 0,
+          "task_duration_delta_ms": 519.82,
+          "script_duration_delta_ms": 515.64,
+          "heap_used_delta_mb": 16.094,
+          "heap_used_mb_after": 337.533,
+          "nodes_after": 114
+        },
+        "after": {
+          "elapsed_ms": 11970.15,
+          "request_count": 5,
+          "api_request_count": 5,
+          "response_content_length_bytes": 76658,
+          "response_decoded_body_bytes": 252854,
+          "task_duration_delta_ms": 11971.44,
+          "script_duration_delta_ms": 2303.33,
+          "heap_used_delta_mb": 22.079,
+          "heap_used_mb_after": 336.16,
+          "nodes_after": 114
+        },
+        "improvement_x": {
+          "elapsed_ms": 0.06,
+          "request_count": 1.0,
+          "api_request_count": null,
+          "response_content_length_bytes": 0.0,
+          "response_decoded_body_bytes": null,
+          "task_duration_delta_ms": 0.043,
+          "script_duration_delta_ms": 0.224,
+          "heap_used_mb_after": 1.004
+        }
+      },
+      "regional_pan": {
+        "before": {
+          "elapsed_ms": 104326.48,
+          "request_count": 40,
+          "response_content_length_bytes": 50842842,
+          "task_duration_delta_ms": 109454.39,
+          "script_duration_delta_ms": 14801.46,
+          "heap_used_delta_mb": 279.987,
+          "heap_used_mb_after": 617.533,
+          "nodes_after": 114
+        },
+        "after": {
+          "elapsed_ms": 117213.58,
+          "request_count": 40,
+          "api_request_count": 40,
+          "response_content_length_bytes": 50766184,
+          "response_decoded_body_bytes": 131386508,
+          "task_duration_delta_ms": 122408.4,
+          "script_duration_delta_ms": 17901.29,
+          "heap_used_delta_mb": 232.191,
+          "heap_used_mb_after": 572.85,
+          "nodes_after": 114
+        },
+        "improvement_x": {
+          "elapsed_ms": 0.89,
+          "request_count": 1.0,
+          "api_request_count": null,
+          "response_content_length_bytes": 1.002,
+          "response_decoded_body_bytes": null,
+          "task_duration_delta_ms": 0.894,
+          "script_duration_delta_ms": 0.827,
+          "heap_used_mb_after": 1.078
+        }
+      },
+      "search_highlight": {
+        "before": {
+          "elapsed_ms": 13796.5,
+          "request_count": 6,
+          "response_content_length_bytes": 7459857,
+          "task_duration_delta_ms": 13706.79,
+          "script_duration_delta_ms": 2012.25,
+          "heap_used_delta_mb": -165.716,
+          "heap_used_mb_after": 475.42,
+          "nodes_after": 166
+        },
+        "after": {
+          "elapsed_ms": 14994.93,
+          "request_count": 5,
+          "api_request_count": 3,
+          "response_content_length_bytes": 48814,
+          "response_decoded_body_bytes": 2887465,
+          "task_duration_delta_ms": 20739.15,
+          "script_duration_delta_ms": 2900.07,
+          "heap_used_delta_mb": -79.633,
+          "heap_used_mb_after": 469.563,
+          "nodes_after": 1161
+        },
+        "improvement_x": {
+          "elapsed_ms": 0.92,
+          "request_count": 1.2,
+          "api_request_count": null,
+          "response_content_length_bytes": 152.822,
+          "response_decoded_body_bytes": null,
+          "task_duration_delta_ms": 0.661,
+          "script_duration_delta_ms": 0.694,
+          "heap_used_mb_after": 1.012
+        }
+      }
+    }
+  },
+  "limiting_factors_for_20x": [
+    {
+      "area": "first_useful_interaction",
+      "metric": "boundaries_ready_ms",
+      "improvement_x": 0.964,
+      "note": "Includes first baked manifest/tile availability plus initial style/tile decode time."
+    },
+    {
+      "area": "pan_zoom",
+      "metric": "low_zoom_pan.elapsed_ms",
+      "improvement_x": 0.06,
+      "note": "Low-zoom interaction still includes map redraw, tile decode, and event/frame scheduling costs."
+    },
+    {
+      "area": "pan_zoom",
+      "metric": "regional_pan.elapsed_ms",
+      "improvement_x": 0.89,
+      "note": "Regional pan cost now bounded by vector-tile decode and render update instead of large GeoJSON fetch/parse."
+    },
+    {
+      "area": "hover_click",
+      "metric": "hover_click_select.elapsed_ms",
+      "improvement_x": 0.85,
+      "note": "Explicit live overlay fetch remains by design for selected/highlighted geometry."
+    }
+  ],
+  "measured_at_utc": "2026-04-20T20:14:39.422727+00:00",
+  "baseline_path": "docs/qa/baked_interactive_geometry_phase_a_ui_baseline_2026-04-17.json",
+  "current_path": "docs/qa/baked_interactive_geometry_phase_f_current_2026-04-20.json"
+}

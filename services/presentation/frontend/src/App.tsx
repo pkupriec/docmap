@@ -1,10 +1,22 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchBoundaries, fetchDocumentLocations, fetchLocationDocuments, fetchLocations, fetchSearch } from "./api";
+import {
+  fetchBakedManifest,
+  fetchBakedTileIndex,
+  fetchBoundaries,
+  fetchDocumentLocations,
+  fetchLocationDocuments,
+  fetchLocations,
+  fetchSearch,
+} from "./api";
+import type { ChangeEvent } from "react";
 import { MapView } from "./MapView";
 import { PdfThumbnail } from "./PdfThumbnail";
 import type {
   BoundaryCollection,
+  BoundaryFeature,
+  BakedManifest,
+  BakedTileIndex,
   DocumentCard,
   DocumentLocation,
   Location,
@@ -16,7 +28,9 @@ import type {
 
 type UiStatus = "loading" | "ready" | "error";
 type ErrorContext = "startup" | "location_documents" | "search" | "unknown";
-type BoundariesStatus = "idle" | "loading" | "ready" | "error";
+type BoundariesStatus = "loading" | "ready" | "error";
+type PrecisionMode = "full_precise" | "balanced_precise" | "simplified" | "primitive";
+type BackgroundPreloadStatus = "idle" | "loading" | "paused" | "complete";
 type ActiveMode =
   | "PDF Modal"
   | "Pinned Document"
@@ -29,6 +43,15 @@ type ActiveMode =
 const EMPTY_SEARCH_RESULTS: SearchResponse = { query: "", documents: [], locations: [] };
 const LINK_DECLUTTER_LIMIT = 12;
 const LOCATION_DOCUMENTS_PAGE_SIZE = 80;
+const BACKGROUND_PRELOAD_CONCURRENCY = 1;
+const BACKGROUND_PRELOAD_DELAY_MS = 45;
+const BACKGROUND_PRELOAD_RESUME_DELAY_MS = 800;
+const PRECISION_MODE_OPTIONS: Array<{ value: PrecisionMode; label: string }> = [
+  { value: "full_precise", label: "Full precise" },
+  { value: "balanced_precise", label: "Balanced precise" },
+  { value: "simplified", label: "Simplified" },
+  { value: "primitive", label: "Primitive" },
+];
 
 function isFiniteCoordinate(latitude: number, longitude: number): boolean {
   return (
@@ -58,9 +81,22 @@ function buildUmbrellaPath(source: ScreenPoint, anchorY: number, target: ScreenP
   return `M ${source.x} ${source.y} L ${source.x} ${anchorY} L ${target.x} ${anchorY} L ${target.x} ${target.y}`;
 }
 
+function buildBakedTileUrl(template: string, tile: string): string | null {
+  const parts = tile.split("/");
+  if (parts.length !== 3) {
+    return null;
+  }
+  const [z, x, y] = parts;
+  return template.replace("{z}", z).replace("{x}", x).replace("{y}", y);
+}
+
 function formatRank(rank: string | null | undefined): string {
   const normalized = String(rank ?? "unknown").toLowerCase();
-  if (normalized === "admin_region" || normalized === "region") {
+  if (
+    normalized === "admin_region" ||
+    normalized === "region" ||
+    /^admin_level_\d+$/.test(normalized)
+  ) {
     return "Admin";
   }
   if (normalized === "country") {
@@ -71,6 +107,12 @@ function formatRank(rank: string | null | undefined): string {
   }
   if (normalized === "ocean") {
     return "Ocean";
+  }
+  if (normalized === "national_park") {
+    return "National Park";
+  }
+  if (normalized === "desert") {
+    return "Desert";
   }
   if (normalized === "city") {
     return "City";
@@ -91,17 +133,77 @@ function errorMessageFor(context: ErrorContext): string {
   return "Unable to load data.";
 }
 
-const EMPTY_BOUNDARIES: BoundaryCollection = {
-  type: "FeatureCollection",
-  features: [],
+type BoundaryFeatureMap = Record<string, BoundaryFeature>;
+const BOUNDARY_RENDER_RANK_PRIORITY: Record<string, number> = {
+  ocean: 0,
+  continent: 1,
+  country: 2,
+  admin_region: 3,
+  region: 3,
+  city: 4,
+  national_park: 5,
+  desert: 5,
+  unknown: 90,
 };
 
+function getBoundaryFeatureKey(feature: BoundaryFeature, fallbackIndex: number): string {
+  const locationId = String(feature.properties.location_id ?? "").trim();
+  if (locationId) {
+    return locationId;
+  }
+  return `feature:${fallbackIndex}:${feature.properties.location_rank ?? "unknown"}:${feature.properties.location_name ?? "unknown"}`;
+}
+
+function buildBoundaryFeatureMap(collection: BoundaryCollection): BoundaryFeatureMap {
+  const next: BoundaryFeatureMap = {};
+  collection.features.forEach((feature, index) => {
+    next[getBoundaryFeatureKey(feature, index)] = feature;
+  });
+  return next;
+}
+
+function sortBoundaryFeatures(features: BoundaryFeature[]): BoundaryFeature[] {
+  return [...features].sort((left, right) => {
+    const rankA = String(left.properties.location_rank ?? "unknown");
+    const rankB = String(right.properties.location_rank ?? "unknown");
+    const priorityA = BOUNDARY_RENDER_RANK_PRIORITY[rankA] ?? 99;
+    const priorityB = BOUNDARY_RENDER_RANK_PRIORITY[rankB] ?? 99;
+    if (priorityA !== priorityB) {
+      return priorityA - priorityB;
+    }
+    const idA = String(left.properties.location_id ?? "");
+    const idB = String(right.properties.location_id ?? "");
+    if (idA !== idB) {
+      return idA.localeCompare(idB);
+    }
+    return String(left.properties.location_name ?? "").localeCompare(String(right.properties.location_name ?? ""));
+  });
+}
+
 export default function App() {
+  const runtimeWindow = globalThis as typeof globalThis & {
+    __DOCMAP_TEST_HOOKS__?: {
+      setViewport?: (viewport: MapViewport) => void;
+      setPinnedLocationId?: (locationId: string | null) => void;
+      setHighlightedLocationIds?: (locationIds: string[]) => void;
+      clearHighlightedLocationIds?: () => void;
+      setPrecisionMode?: (mode: PrecisionMode) => void;
+      getBoundaryDebug?: () => Record<string, unknown>;
+    };
+    __DOCMAP_BOUNDARY_DEBUG__?: Record<string, unknown>;
+  };
   const [status, setStatus] = useState<UiStatus>("loading");
   const [errorContext, setErrorContext] = useState<ErrorContext>("unknown");
   const [locations, setLocations] = useState<Location[]>([]);
-  const [boundaries, setBoundaries] = useState<BoundaryCollection>(EMPTY_BOUNDARIES);
-  const [boundariesStatus, setBoundariesStatus] = useState<BoundariesStatus>("idle");
+  const [bakedManifest, setBakedManifest] = useState<BakedManifest | null>(null);
+  const [bakedTileIndex, setBakedTileIndex] = useState<BakedTileIndex | null>(null);
+  const [sessionPrecisionMode, setSessionPrecisionMode] = useState<PrecisionMode | null>(null);
+  const [explicitBoundaryFeatures, setExplicitBoundaryFeatures] = useState<BoundaryFeatureMap>({});
+  const [boundariesStatus, setBoundariesStatus] = useState<BoundariesStatus>("loading");
+  const [backgroundPreloadStatus, setBackgroundPreloadStatus] = useState<BackgroundPreloadStatus>("idle");
+  const [backgroundPreloadCompletedCount, setBackgroundPreloadCompletedCount] = useState(0);
+  const [backgroundPreloadErrorCount, setBackgroundPreloadErrorCount] = useState(0);
+  const [isViewportSettledForPreload, setIsViewportSettledForPreload] = useState(false);
   const [locationDocuments, setLocationDocuments] = useState<DocumentCard[]>([]);
   const [locationDocumentsMeta, setLocationDocumentsMeta] = useState<LocationDocumentsResponse | null>(null);
   const [isLoadingMoreDocuments, setIsLoadingMoreDocuments] = useState(false);
@@ -120,6 +222,8 @@ export default function App() {
     Array<{ latitude: number; longitude: number }>
   >([]);
   const [declutterLinks, setDeclutterLinks] = useState(true);
+  const [mapViewport, setMapViewport] = useState<MapViewport | null>(null);
+  const [testHighlightedLocationIds, setTestHighlightedLocationIds] = useState<string[] | null>(null);
 
   const linksByDocumentIdRef = useRef<Record<string, DocumentLocation[]>>({});
   const pendingDocumentLocationsRef = useRef<Record<string, Promise<DocumentLocation[]>>>({});
@@ -130,11 +234,18 @@ export default function App() {
   const viewportRafRef = useRef<number | null>(null);
   const cardRefs = useRef<Record<string, HTMLElement | null>>({});
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const pdfModalRef = useRef<HTMLDivElement | null>(null);
   const startupTimestampRef = useRef<number>(performance.now());
   const firstMeaningfulRenderLoggedRef = useRef(false);
   const boundariesReadyLoggedRef = useRef(false);
+  const explicitBoundaryRequestVersionRef = useRef(0);
+  const explicitBoundaryCacheRef = useRef<Record<string, BoundaryFeatureMap>>({});
+  const preloadResumeTimerRef = useRef<number | null>(null);
+  const backgroundPreloadedTilesRef = useRef<Record<string, Set<string>>>({});
+  const backgroundPreloadCursorRef = useRef<Record<string, number>>({});
 
   const selectedLocationId = pinnedLocationId ?? hoveredLocationId;
+  const boundaryExplicitLocationId = pinnedLocationId;
   const searchActive = searchQuery.trim().length >= 3;
   const activeVisualizationDocumentId = pinnedDocumentId ?? hoveredDocumentId;
 
@@ -219,14 +330,19 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     startupTimestampRef.current = performance.now();
+    boundariesReadyLoggedRef.current = false;
     setBoundariesStatus("loading");
 
-    fetchLocations()
-      .then((items) => {
+    Promise.all([fetchLocations(), fetchBakedManifest()])
+      .then(([items, manifest]) => {
         if (cancelled) {
           return;
         }
         setLocations(items.filter((item) => isFiniteCoordinate(item.latitude, item.longitude)));
+        setBakedManifest(manifest);
+        if (manifest.mode) {
+          setSessionPrecisionMode(manifest.mode as PrecisionMode);
+        }
         setErrorContext("unknown");
         setStatus("ready");
         if (!firstMeaningfulRenderLoggedRef.current) {
@@ -241,36 +357,188 @@ export default function App() {
         }
         setErrorContext("startup");
         setStatus("error");
-      });
-
-    fetchBoundaries({
-      lite: true,
-      rank_filter: "default",
-    })
-      .then((nextBoundaries) => {
-        if (cancelled) {
-          return;
-        }
-        setBoundaries(nextBoundaries);
-        setBoundariesStatus("ready");
-        if (!boundariesReadyLoggedRef.current) {
-          boundariesReadyLoggedRef.current = true;
-          const elapsedMs = performance.now() - startupTimestampRef.current;
-          console.info("presentation.performance.boundaries_ready_ms", elapsedMs.toFixed(2));
-        }
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
         setBoundariesStatus("error");
-        console.warn("presentation.boundaries_unavailable");
       });
 
     return () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!sessionPrecisionMode || bakedManifest?.mode === sessionPrecisionMode) {
+      return;
+    }
+    let cancelled = false;
+    boundariesReadyLoggedRef.current = false;
+    setBoundariesStatus("loading");
+    fetchBakedManifest(sessionPrecisionMode)
+      .then((manifest) => {
+        if (cancelled) {
+          return;
+        }
+        setBakedManifest(manifest);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setBoundariesStatus("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bakedManifest?.mode, sessionPrecisionMode]);
+
+  useEffect(() => {
+    if (!bakedManifest?.mode) {
+      setBakedTileIndex(null);
+      return;
+    }
+    let cancelled = false;
+    fetchBakedTileIndex(bakedManifest.mode)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setBakedTileIndex(payload);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setBakedTileIndex(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bakedManifest?.mode, bakedManifest?.version]);
+
+  useEffect(() => {
+    const modeKey =
+      bakedManifest?.version && bakedManifest?.mode ? `${bakedManifest.version}:${bakedManifest.mode}` : null;
+    if (!modeKey) {
+      setBackgroundPreloadStatus("idle");
+      setBackgroundPreloadCompletedCount(0);
+      setBackgroundPreloadErrorCount(0);
+      return;
+    }
+    const seen = backgroundPreloadedTilesRef.current[modeKey] ?? new Set<string>();
+    backgroundPreloadedTilesRef.current[modeKey] = seen;
+    setBackgroundPreloadCompletedCount(seen.size);
+    setBackgroundPreloadErrorCount(0);
+    setBackgroundPreloadStatus("idle");
+  }, [bakedManifest?.mode, bakedManifest?.version]);
+
+  useEffect(() => {
+    const manifest = bakedManifest;
+    const index = bakedTileIndex;
+    if (!manifest || !index || !manifest.tile_url_template) {
+      return;
+    }
+    const modeKey = `${manifest.version}:${manifest.mode}`;
+    const seen = backgroundPreloadedTilesRef.current[modeKey] ?? new Set<string>();
+    backgroundPreloadedTilesRef.current[modeKey] = seen;
+    if (boundariesStatus !== "ready") {
+      return;
+    }
+    if (!isViewportSettledForPreload) {
+      if (seen.size < index.tiles.length) {
+        setBackgroundPreloadStatus("paused");
+      }
+      return;
+    }
+
+    const controller = new AbortController();
+    let cancelled = false;
+    setBackgroundPreloadStatus("loading");
+
+    const run = async () => {
+      let cursor = backgroundPreloadCursorRef.current[modeKey] ?? 0;
+      let inFlight = 0;
+      let scheduled = 0;
+      const pending: Promise<void>[] = [];
+
+      const scheduleNext = () => {
+        if (cancelled) {
+          return;
+        }
+        while (cursor < index.tiles.length && seen.has(index.tiles[cursor])) {
+          cursor += 1;
+        }
+        backgroundPreloadCursorRef.current[modeKey] = cursor;
+        if (cursor >= index.tiles.length) {
+          return;
+        }
+        const tile = index.tiles[cursor];
+        cursor += 1;
+        backgroundPreloadCursorRef.current[modeKey] = cursor;
+        const url = buildBakedTileUrl(manifest.tile_url_template, tile);
+        if (!url) {
+          scheduleNext();
+          return;
+        }
+        scheduled += 1;
+        inFlight += 1;
+        const work = fetch(url, { signal: controller.signal, cache: "force-cache" })
+          .then((response) => {
+            if (response.ok || response.status === 404) {
+              seen.add(tile);
+              setBackgroundPreloadCompletedCount(seen.size);
+              return;
+            }
+            setBackgroundPreloadErrorCount((current) => current + 1);
+          })
+          .catch((error: unknown) => {
+            if (error instanceof DOMException && error.name === "AbortError") {
+              return;
+            }
+            setBackgroundPreloadErrorCount((current) => current + 1);
+          })
+          .finally(async () => {
+            inFlight -= 1;
+            if (!cancelled) {
+              await new Promise((resolve) => window.setTimeout(resolve, BACKGROUND_PRELOAD_DELAY_MS));
+              scheduleNext();
+            }
+          });
+        pending.push(work);
+      };
+
+      for (let indexCursor = 0; indexCursor < BACKGROUND_PRELOAD_CONCURRENCY; indexCursor += 1) {
+        scheduleNext();
+      }
+      while (!cancelled && inFlight > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, BACKGROUND_PRELOAD_DELAY_MS));
+      }
+      await Promise.all(pending);
+      if (cancelled) {
+        return;
+      }
+      if (seen.size >= index.tiles.length) {
+        setBackgroundPreloadStatus("complete");
+        console.info(
+          "presentation.performance.background_preload_complete mode=%s loaded=%s scheduled=%s",
+          manifest.mode,
+          seen.size,
+          scheduled,
+        );
+      } else {
+        setBackgroundPreloadStatus("paused");
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    bakedManifest,
+    bakedTileIndex,
+    boundariesStatus,
+    isViewportSettledForPreload,
+  ]);
 
   useEffect(() => {
     if (!selectedLocationId || searchActive) {
@@ -458,6 +726,10 @@ export default function App() {
       if (viewportRafRef.current !== null) {
         window.cancelAnimationFrame(viewportRafRef.current);
       }
+      if (preloadResumeTimerRef.current !== null) {
+        window.clearTimeout(preloadResumeTimerRef.current);
+        preloadResumeTimerRef.current = null;
+      }
     },
     [],
   );
@@ -475,6 +747,27 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pdfModalDocumentId]);
+
+  useEffect(() => {
+    if (!pdfModalDocumentId) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const modal = pdfModalRef.current;
+      if (!modal) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Node) || modal.contains(target)) {
+        return;
+      }
+      setPdfModalDocumentId(null);
+    };
+
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
   }, [pdfModalDocumentId]);
 
   const searchFocusCoordinates = useMemo(() => {
@@ -525,9 +818,18 @@ export default function App() {
     [],
   );
 
-  const onViewportChange = useCallback(
+  const applyViewportChange = useCallback(
     (viewport: MapViewport) => {
       mapViewportRef.current = viewport;
+      setMapViewport(viewport);
+      setIsViewportSettledForPreload(false);
+      if (preloadResumeTimerRef.current !== null) {
+        window.clearTimeout(preloadResumeTimerRef.current);
+      }
+      preloadResumeTimerRef.current = window.setTimeout(() => {
+        preloadResumeTimerRef.current = null;
+        setIsViewportSettledForPreload(true);
+      }, BACKGROUND_PRELOAD_RESUME_DELAY_MS);
       if (!activeVisualizationDocumentIdRef.current) {
         return;
       }
@@ -542,6 +844,35 @@ export default function App() {
     [updateVisibleLinksForActiveDocument],
   );
 
+  const onViewportChange = useCallback(
+    (viewport: MapViewport) => {
+      applyViewportChange(viewport);
+    },
+    [applyViewportChange],
+  );
+  const onBakedStatusChange = useCallback(
+    (nextStatus: "waiting_viewport" | "loading" | "ready" | "error") => {
+      if (nextStatus === "waiting_viewport") {
+        setBoundariesStatus("loading");
+        return;
+      }
+      setBoundariesStatus(nextStatus);
+      if (nextStatus === "ready" && !boundariesReadyLoggedRef.current) {
+        boundariesReadyLoggedRef.current = true;
+        const elapsedMs = performance.now() - startupTimestampRef.current;
+        console.info("presentation.performance.boundaries_ready_ms", elapsedMs.toFixed(2));
+      }
+    },
+    [],
+  );
+  const onPrecisionModeChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const nextMode = event.target.value as PrecisionMode;
+      setSessionPrecisionMode(nextMode);
+    },
+    [],
+  );
+
   const selectedLocation = useMemo(
     () => locations.find((item) => item.location_id === selectedLocationId) ?? null,
     [locations, selectedLocationId],
@@ -552,10 +883,127 @@ export default function App() {
     [activeVisualizationDocumentId, uniqueDisplayedDocuments],
   );
 
-  const highlightedLocationIds = useMemo(
-    () => (searchActive ? searchResults.locations.map((location) => location.location_id) : []),
-    [searchActive, searchResults.locations],
+  const highlightedLocationIds = useMemo(() => {
+    if (testHighlightedLocationIds !== null) {
+      return testHighlightedLocationIds;
+    }
+    return searchActive ? searchResults.locations.map((location) => location.location_id) : [];
+  }, [searchActive, searchResults.locations, testHighlightedLocationIds]);
+
+  const sortedHighlightedLocationIds = useMemo(
+    () => Array.from(new Set(highlightedLocationIds)).sort(),
+    [highlightedLocationIds],
   );
+
+  const explicitBoundaryLocationIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (boundaryExplicitLocationId) {
+      ids.add(boundaryExplicitLocationId);
+    }
+    sortedHighlightedLocationIds.forEach((locationId) => ids.add(locationId));
+    return Array.from(ids).sort();
+  }, [boundaryExplicitLocationId, sortedHighlightedLocationIds]);
+
+  const boundaries = useMemo<BoundaryCollection>(
+    () => ({
+      type: "FeatureCollection",
+      features: sortBoundaryFeatures(Object.values(explicitBoundaryFeatures)),
+    }),
+    [explicitBoundaryFeatures],
+  );
+
+  useEffect(() => {
+    if (explicitBoundaryLocationIds.length === 0) {
+      setExplicitBoundaryFeatures({});
+      return;
+    }
+
+    const requestKey = explicitBoundaryLocationIds.join(",");
+    const cached = explicitBoundaryCacheRef.current[requestKey];
+    if (cached) {
+      setExplicitBoundaryFeatures(cached);
+      return;
+    }
+
+    const requestVersion = explicitBoundaryRequestVersionRef.current + 1;
+    explicitBoundaryRequestVersionRef.current = requestVersion;
+
+    fetchBoundaries({
+      lite: true,
+      rank_filter: "all",
+      selected_location_id: boundaryExplicitLocationId,
+      highlighted_location_ids: sortedHighlightedLocationIds,
+    })
+      .then((nextBoundaries) => {
+        if (explicitBoundaryRequestVersionRef.current !== requestVersion) {
+          return;
+        }
+        const nextFeatures = buildBoundaryFeatureMap(nextBoundaries);
+        explicitBoundaryCacheRef.current[requestKey] = nextFeatures;
+        setExplicitBoundaryFeatures(nextFeatures);
+      })
+      .catch(() => {
+        if (explicitBoundaryRequestVersionRef.current !== requestVersion) {
+          return;
+        }
+        console.warn("presentation.explicit_boundaries_unavailable");
+      });
+  }, [boundaryExplicitLocationId, explicitBoundaryLocationIds, sortedHighlightedLocationIds]);
+
+  useEffect(() => {
+    runtimeWindow.__DOCMAP_BOUNDARY_DEBUG__ = {
+      boundariesStatus,
+      sessionPrecisionMode,
+      defaultPrecisionMode: bakedManifest?.default_mode ?? null,
+      bakedVersion: bakedManifest?.version ?? null,
+      bakedTileUrlTemplate: bakedManifest?.tile_url_template ?? null,
+      backgroundPreloadStatus,
+      backgroundPreloadCompletedCount,
+      backgroundPreloadErrorCount,
+      backgroundPreloadTotalCount: bakedTileIndex?.tile_count ?? 0,
+      explicitBoundaryLocationIds,
+      renderedBoundaryFeatureCount: boundaries.features.length,
+    };
+  }, [
+    backgroundPreloadCompletedCount,
+    backgroundPreloadErrorCount,
+    backgroundPreloadStatus,
+    bakedTileIndex?.tile_count,
+    boundaries.features.length,
+    boundariesStatus,
+    bakedManifest?.default_mode,
+    bakedManifest?.tile_url_template,
+    bakedManifest?.version,
+    explicitBoundaryLocationIds,
+    runtimeWindow,
+    sessionPrecisionMode,
+  ]);
+
+  useEffect(() => {
+    runtimeWindow.__DOCMAP_TEST_HOOKS__ = {
+      setViewport: (viewport) => {
+        applyViewportChange(viewport);
+      },
+      setPinnedLocationId: (locationId) => {
+        setPinnedLocationId(locationId);
+        setHoveredLocationId(locationId);
+      },
+      setHighlightedLocationIds: (locationIds) => {
+        setTestHighlightedLocationIds(Array.from(new Set(locationIds)).sort());
+      },
+      clearHighlightedLocationIds: () => {
+        setTestHighlightedLocationIds([]);
+      },
+      setPrecisionMode: (mode) => {
+        setSessionPrecisionMode(mode);
+      },
+      getBoundaryDebug: () => runtimeWindow.__DOCMAP_BOUNDARY_DEBUG__ ?? {},
+    };
+    return () => {
+      delete runtimeWindow.__DOCMAP_TEST_HOOKS__;
+      delete runtimeWindow.__DOCMAP_BOUNDARY_DEBUG__;
+    };
+  }, [applyViewportChange, runtimeWindow]);
 
   const visibleLinksToRender = useMemo(() => {
     if (!declutterLinks) {
@@ -650,6 +1098,27 @@ export default function App() {
               <h1>DocMap</h1>
               <p className="caption">Presentation Layer</p>
               <p>Locations: {locations.length}</p>
+              <label className="precision-control" htmlFor="precision-mode-select">
+                Precision
+                <select
+                  id="precision-mode-select"
+                  value={sessionPrecisionMode ?? bakedManifest?.mode ?? "balanced_precise"}
+                  onChange={onPrecisionModeChange}
+                >
+                  {PRECISION_MODE_OPTIONS.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      disabled={Boolean(
+                        bakedManifest?.available_modes.length &&
+                          !bakedManifest.available_modes.includes(option.value),
+                      )}
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button type="button" onClick={onClear}>
                 Clear
               </button>
@@ -662,6 +1131,12 @@ export default function App() {
               <button type="button" title="Clear selections" onClick={onClear}>
                 C
               </button>
+              <button
+                type="button"
+                title={`Precision: ${sessionPrecisionMode ?? bakedManifest?.mode ?? "balanced_precise"}`}
+              >
+                P
+              </button>
             </div>
           )}
         </aside>
@@ -669,7 +1144,8 @@ export default function App() {
         <main className="map-panel">
           <MapView
             locations={locations}
-            boundaries={boundaries}
+            explicitBoundaries={boundaries}
+            bakedTileUrlTemplate={bakedManifest?.tile_url_template ?? null}
             selectedLocationId={selectedLocationId}
             highlightedLocationIds={highlightedLocationIds}
             onHoverLocation={onHoverLocation}
@@ -677,6 +1153,7 @@ export default function App() {
             onEmptyMapClick={onEmptyMapClick}
             onViewportChange={onViewportChange}
             onProjectorChange={onProjectorChange}
+            onBakedStatusChange={onBakedStatusChange}
             focusCoordinates={searchFocusCoordinates}
           />
 
@@ -727,10 +1204,18 @@ export default function App() {
           {status === "loading" && <p>Loading locations...</p>}
           {status === "error" && <p>{errorMessageFor(errorContext)}</p>}
           {status === "ready" && boundariesStatus === "loading" ? (
-            <p className="fallback-note">Loading boundaries in background...</p>
+            <p className="fallback-note">Loading baked geometry...</p>
           ) : null}
           {status === "ready" && boundariesStatus === "error" ? (
             <p className="fallback-note">Boundaries unavailable. Showing location points only.</p>
+          ) : null}
+          {status === "ready" && boundariesStatus === "ready" && backgroundPreloadStatus === "loading" ? (
+            <p className="fallback-note">
+              Background geometry preload: {backgroundPreloadCompletedCount}/{bakedTileIndex?.tile_count ?? 0}
+            </p>
+          ) : null}
+          {status === "ready" && boundariesStatus === "ready" && backgroundPreloadStatus === "paused" ? (
+            <p className="fallback-note">Background geometry preload paused while interacting.</p>
           ) : null}
 
           {status === "ready" && searchActive ? (
@@ -828,15 +1313,12 @@ export default function App() {
       {pdfModalDocumentId ? (
         <div
           className="pdf-modal-backdrop"
-          role="button"
-          tabIndex={-1}
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              setPdfModalDocumentId(null);
-            }
+          style={{
+            left: isLeftPanelCollapsed ? 50 : 240,
+            right: 390,
           }}
         >
-          <div className="pdf-modal" role="dialog" aria-modal="true">
+          <div ref={pdfModalRef} className="pdf-modal" role="dialog" aria-modal="true">
             <button type="button" className="pdf-close" onClick={() => setPdfModalDocumentId(null)}>
               Close
             </button>

@@ -1090,12 +1090,12 @@ class ControlOrchestrator:
                 )
 
             def on_analytics_detail(step_name: str, processed_items: int, total_items: int) -> None:
-                if step_name != "admin_boundaries":
+                if step_name not in {"admin_boundaries", "presentation_baked_geometry"}:
                     return
                 if total_items <= 0:
-                    label = "admin_boundaries 0/0"
+                    label = f"{step_name} 0/0"
                 else:
-                    label = f"admin_boundaries {processed_items}/{total_items}"
+                    label = f"{step_name} {processed_items}/{total_items}"
                 self.repository.upsert_progress(
                     run_id,
                     stage,
@@ -1111,7 +1111,7 @@ class ControlOrchestrator:
                     stage,
                     "analytics",
                     "INFO",
-                    f"matching {label}",
+                    f"building {label}" if step_name == "presentation_baked_geometry" else f"matching {label}",
                     event_type="progress",
                     current_index=processed,
                 )
