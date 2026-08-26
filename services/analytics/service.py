@@ -8,6 +8,7 @@ from typing import Callable
 
 from psycopg import Connection
 
+from services.analytics.baked_geometry_assets import build_baked_geometry_assets
 from services.common.db import get_connection
 from services.analytics.geometry_assets import build_admin_boundaries_asset
 from services.analytics.scripts.build_admin_boundaries_source import build_source_dataset
@@ -24,6 +25,7 @@ ANALYTICS_STEP_NAMES = [
     "bi_document_locations",
     "admin_boundaries_source",
     "admin_boundaries",
+    "presentation_baked_geometry",
     "bi_location_hierarchy",
 ]
 
@@ -166,7 +168,7 @@ def build_bi_locations(conn: Connection) -> int:
                 gl.osm_boundingbox,
                 COALESCE(docs.document_count, 0) AS document_count
             FROM geo_locations gl
-            LEFT JOIN (
+            JOIN (
                 SELECT location_id, COUNT(DISTINCT document_id) AS document_count
                 FROM document_locations
                 GROUP BY location_id
@@ -555,6 +557,15 @@ def build_bi_location_hierarchy(conn: Connection) -> int:
         return cur.rowcount
 
 
+def build_presentation_baked_geometry(
+    conn: Connection,
+    *,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> int:
+    result = build_baked_geometry_assets(conn, on_progress=on_progress)
+    return result.total_archives
+
+
 def rebuild_analytics(
     *,
     on_step: AnalyticsStepCallback | None = None,
@@ -568,6 +579,7 @@ def rebuild_analytics(
         ("bi_document_locations", build_bi_document_locations),
         ("admin_boundaries_source", build_admin_boundaries_source),
         ("admin_boundaries", lambda conn: build_admin_boundaries_asset(conn).features_written),
+        ("presentation_baked_geometry", build_presentation_baked_geometry),
         ("bi_location_hierarchy", build_bi_location_hierarchy),
     ]
     if start_index < 0:
@@ -581,6 +593,7 @@ def rebuild_analytics(
     hierarchy_rows = 0
     admin_boundaries_source_rows = 0
     admin_boundaries_rows = 0
+    presentation_baked_geometry_rows = 0
     for idx, (name, fn) in enumerate(steps):
         if idx < start_index:
             continue
@@ -594,6 +607,15 @@ def rebuild_analytics(
                         else None
                     ),
                 ).features_written
+            elif name == "presentation_baked_geometry":
+                rows = build_presentation_baked_geometry(
+                    conn,
+                    on_progress=(
+                        (lambda processed, total: on_detail("presentation_baked_geometry", processed, total))
+                        if on_detail
+                        else None
+                    ),
+                )
             else:
                 rows = fn(conn)
             conn.commit()
@@ -608,6 +630,8 @@ def rebuild_analytics(
             hierarchy_rows = rows
         elif name == "admin_boundaries_source":
             admin_boundaries_source_rows = rows
+        elif name == "presentation_baked_geometry":
+            presentation_baked_geometry_rows = rows
         else:
             admin_boundaries_rows = rows
         if on_step:
@@ -620,6 +644,7 @@ def rebuild_analytics(
         "bi_location_hierarchy": hierarchy_rows,
         "admin_boundaries_source": admin_boundaries_source_rows,
         "admin_boundaries": admin_boundaries_rows,
+        "presentation_baked_geometry": presentation_baked_geometry_rows,
     }
     logger.info("analytics.rebuild_done stats=%s", stats)
     return stats

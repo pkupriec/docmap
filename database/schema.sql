@@ -36,6 +36,7 @@ CREATE TABLE document_snapshots (
     raw_html TEXT,
     clean_text TEXT,
     pdf_blob BYTEA,
+    pdf_thumbnail_webp BYTEA,
     created_at TIMESTAMP DEFAULT now()
 );
 
@@ -113,6 +114,7 @@ CREATE TABLE geo_locations (
     canonical_resolution_method TEXT,
     canonical_confidence SMALLINT,
     canonical_resolution_details JSONB,
+    identity_key TEXT,
     geom GEOGRAPHY(Point, 4326)
 );
 
@@ -124,6 +126,19 @@ ON geo_locations(osm_type, osm_id);
 
 CREATE INDEX idx_geo_locations_canonical_id
 ON geo_locations(canonical_id);
+
+CREATE UNIQUE INDEX uq_geo_locations_identity_key
+ON geo_locations(identity_key)
+WHERE identity_key IS NOT NULL;
+
+CREATE TABLE geo_location_aliases (
+    normalized_location TEXT PRIMARY KEY,
+    location_id UUID NOT NULL REFERENCES geo_locations(id) ON DELETE CASCADE,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_geo_location_aliases_location_id
+ON geo_location_aliases(location_id);
 
 -- =====================================================
 -- CANONICAL GEO DICTIONARY
@@ -256,8 +271,18 @@ CREATE TABLE bi_admin_boundaries (
     location_id UUID PRIMARY KEY REFERENCES geo_locations(id),
     location_rank TEXT NOT NULL,
     feature_json JSONB NOT NULL,
+    min_lon DOUBLE PRECISION,
+    min_lat DOUBLE PRECISION,
+    max_lon DOUBLE PRECISION,
+    max_lat DOUBLE PRECISION,
     updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_bi_admin_boundaries_rank
 ON bi_admin_boundaries(location_rank);
+
+CREATE INDEX idx_bi_admin_boundaries_lat_bounds
+ON bi_admin_boundaries(min_lat, max_lat);
+
+CREATE INDEX idx_bi_admin_boundaries_lon_bounds
+ON bi_admin_boundaries(min_lon, max_lon);

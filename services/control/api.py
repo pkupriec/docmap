@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, FastAPI, Query
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -17,6 +18,7 @@ from services.control.schemas import (
     RetryRunRequest,
     StartRunRequest,
 )
+from services.pipeline.service import PipelineCommandService
 
 
 router = APIRouter(prefix="/api")
@@ -54,20 +56,19 @@ def start_run(request: StartRunRequest) -> CommandAcceptedResponse:
     if request.target_scope not in TARGET_SCOPES:
         return _error_response(409, "invalid_request", "invalid target_scope")
 
-    payload = request.model_dump()
-    dedupe_key = f"start_run:{json.dumps(payload, sort_keys=True)}"
-
     repo = ControlRepository()
     try:
-        command_id = repo.enqueue_command(
-            "start_run",
-            payload_json=payload,
-            dedupe_key=dedupe_key,
+        queued = PipelineCommandService(repo).enqueue_run(
+            pipeline_type=request.pipeline_type,
+            target_scope=request.target_scope,
+            document_url=request.document_url,
+            document_range=request.document_range,
+            options=request.options,
         )
     except DuplicatePendingCommandError:
         return _error_response(409, "duplicate_command", "duplicate pending start_run command")
 
-    return CommandAcceptedResponse(command_id=command_id, status="pending")
+    return CommandAcceptedResponse(command_id=queued.command_id, status=queued.status)
 
 
 @router.get("/runs/{run_id}")
@@ -195,50 +196,49 @@ async def stream_events(run_id: int, last_event_id: str | None = None) -> Stream
         except ValueError:
             after_log_id = 0
 
-    async def generator():
-        nonlocal after_log_id
-        while True:
-            snapshot = repo.get_latest_state_snapshot(run_id, after_log_id=after_log_id)
-            run = _normalize_datetimes(snapshot["run"])
-            yield _sse_event("run_status", f"run-{run['id']}-{run['updated_at']}", run)
+    return StreamingResponse(_run_event_stream(repo, run_id=run_id, after_log_id=after_log_id), media_type="text/event-stream")
 
-            for stage in snapshot["stages"]:
-                item = _normalize_datetimes(stage)
-                yield _sse_event("stage_status", f"stage-{item['id']}-{item['updated_at']}", item)
 
-            for progress_row in snapshot["progress"]:
-                item = _normalize_datetimes(progress_row)
-                yield _sse_event(
-                    "progress",
-                    f"progress-{item['pipeline_run_id']}-{item['stage_name']}-{item['updated_at']}",
-                    item,
-                )
+async def _run_event_stream(repo: ControlRepository, *, run_id: int, after_log_id: int = 0) -> AsyncIterator[str]:
+    while True:
+        snapshot = repo.get_latest_state_snapshot(run_id, after_log_id=after_log_id)
+        run = _normalize_datetimes(snapshot["run"])
+        yield _sse_event("run_status", f"run-{run['id']}-{run['updated_at']}", run)
 
-            for log_row in snapshot["logs"]:
-                item = _normalize_datetimes(log_row)
-                after_log_id = max(after_log_id, int(item["id"]))
-                yield _sse_event("log", str(item["id"]), item)
+        for stage in snapshot["stages"]:
+            item = _normalize_datetimes(stage)
+            yield _sse_event("stage_status", f"stage-{item['id']}-{item['updated_at']}", item)
 
-            yield _sse_event("heartbeat", f"hb-{int(asyncio.get_running_loop().time())}", {"run_id": run_id})
-            await asyncio.sleep(1)
+        for progress_row in snapshot["progress"]:
+            item = _normalize_datetimes(progress_row)
+            yield _sse_event(
+                "progress",
+                f"progress-{item['pipeline_run_id']}-{item['stage_name']}-{item['updated_at']}",
+                item,
+            )
 
-    return StreamingResponse(generator(), media_type="text/event-stream")
+        for log_row in snapshot["logs"]:
+            item = _normalize_datetimes(log_row)
+            after_log_id = max(after_log_id, int(item["id"]))
+            yield _sse_event("log", str(item["id"]), item)
+
+        yield _sse_event("heartbeat", f"hb-{int(asyncio.get_running_loop().time())}", {"run_id": run_id})
+        await asyncio.sleep(1)
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="DocMap Control API", version="1.0.0")
-    app.include_router(router)
-
     orchestrator = ControlOrchestrator()
 
-    @app.on_event("startup")
-    def _startup() -> None:
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
         configure_logging()
         run_startup_migrations()
         orchestrator.start()
+        try:
+            yield
+        finally:
+            orchestrator.stop()
 
-    @app.on_event("shutdown")
-    def _shutdown() -> None:
-        orchestrator.stop()
-
+    app = FastAPI(title="DocMap Control API", version="1.0.0", lifespan=lifespan)
+    app.include_router(router)
     return app

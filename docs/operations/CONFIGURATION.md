@@ -1,61 +1,28 @@
-﻿# Configuration
+# Configuration
 
-Primary runtime config surfaces:
-- `infra/docker-compose.yml`
-- `.env.example`
-- service defaults in `services/*`
-
-## Core App Variables
+Required:
 
 - `DATABASE_URL`
+
+Common pipeline settings:
+
+- `OLLAMA_HOST`, `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_THINK_LEVEL`, `OLLAMA_NUM_PREDICT`
 - `EXTRACTOR_MODEL`
-- `OLLAMA_HOST`
-- `OLLAMA_TIMEOUT_SECONDS`
-- `OLLAMA_THINK_LEVEL`
-- `OLLAMA_NUM_PREDICT`
-- `GEOCODER_URL` (code default if unset)
-- `GEOCODER_MIN_INTERVAL_SECONDS`
-- `GEOCODER_USER_AGENT`
-- `LOG_LEVEL`
-- `PYTHONUNBUFFERED`
+- `GEOCODER_URL`, `GEOCODER_USER_AGENT`, `GEOCODER_MIN_INTERVAL_SECONDS`
+- `CANONICAL_*` variables from `.env.example`
 
-## Startup Migration Variables
+Presentation and artifacts:
 
-- `DB_RESET_ON_START`
-- `DB_DROP_TABLES_ON_START`
-- `DB_STARTUP_MAX_WAIT_SECONDS`
-- `DB_STARTUP_RETRY_INTERVAL_SECONDS`
+- `DOCMAP_PRESENTATION_ARTIFACT_ROOT` (Compose: `/data/presentation_geometry`)
+- `DOCMAP_PRESENTATION_MAX_ARCHIVE_BYTES` (default 512 MiB per archive)
+- `DOCMAP_PRESENTATION_ARTIFACT_RETENTION` (default 2: active release plus one rollback release)
+- `TIPPECANOE_BIN` (image: `/usr/local/bin/tippecanoe`)
+- `DB_POOL_MIN_SIZE` and `DB_POOL_MAX_SIZE` (defaults 1 and 8)
+- `PRESENTATION_STATIC_DIR`
 
-## Canonical Refresh Variables
+Control execution:
 
-- `CANONICAL_REFRESH_ON_GEOCODE`
-- `CANONICAL_DICTIONARY_INPUT`
-- `CANONICAL_DICTIONARY_SOURCE`
-- `CANONICAL_REFRESH_REPORT_PATH`
-- `CANONICAL_REFRESH_REPLACE_SOURCE`
-- `CANONICAL_AUTOSEED_ON_EMPTY`
-- `CANONICAL_BUILD_SEED_SOURCE_ON_REFRESH`
-- `CANONICAL_SEED_SOURCE`
+- `PIPELINE_COMMAND_LEASE_SECONDS`
+- `DOCMAP_EXPORTER`; unset means the built-in no-op export stage
 
-These are consumed by geocoder refresh logic in `services/geocoder/service.py`.
-
-## BigQuery Export Variables
-
-- `GCP_PROJECT_ID`
-- `BIGQUERY_DATASET`
-- `BIGQUERY_LOCATION`
-- `GOOGLE_APPLICATION_CREDENTIALS`
-
-## Scheduler Variables
-
-Used by `services/pipeline/scheduler.py`:
-- `SCHEDULER_CRON`
-- `SCHEDULER_TIMEZONE`
-- `SCHEDULER_MAX_RETRIES`
-
-Scheduler is implemented but not auto-started in current app bootstrap.
-
-## Presentation Runtime
-
-- `DATABASE_URL` (required)
-- `PRESENTATION_STATIC_DIR` (optional, defaults to built frontend path)
+Development-only reset flags are `DB_RESET_ON_START` and `DB_DROP_TABLES_ON_START`. Never enable destructive reset flags against a database containing data you intend to keep.

@@ -8,13 +8,14 @@ from services.common.db import get_connection
 from services.crawler.downloader import RequestThrottler, download_page
 from services.crawler.parser import extract_clean_text, extract_title
 from services.crawler.pdf_renderer import render_pdf_blob, render_pdf_blob_from_text
+from services.crawler.pdf_thumbnail import render_pdf_thumbnail
 from services.crawler.repository import (
     canonical_number_from_url,
     filter_unprocessed_urls as filter_unprocessed_urls_in_db,
     get_latest_snapshot_missing_pdf,
     get_or_create_document,
     get_or_create_scp_object,
-    set_snapshot_pdf_blob,
+    set_snapshot_pdf_assets,
     save_snapshot_if_changed,
 )
 
@@ -58,6 +59,14 @@ def _render_pdf_with_fallback(url: str, title: str | None, clean_text: str) -> b
     except Exception as primary_exc:
         logger.warning("crawler.pdf_render_primary_failed url=%s error=%s", url, primary_exc)
     return render_pdf_blob_from_text(clean_text, title=title or url)
+
+
+def _render_thumbnail_nonfatal(pdf_blob: bytes, *, url: str) -> bytes | None:
+    try:
+        return render_pdf_thumbnail(pdf_blob)
+    except Exception as exc:
+        logger.warning("crawler.pdf_thumbnail_failed_nonfatal url=%s error=%s", url, exc)
+        return None
 
 
 def process_document(
@@ -104,7 +113,12 @@ def process_document(
             try:
                 pdf_blob = _render_pdf_with_fallback(url, title, clean_text)
                 if snapshot_id:
-                    set_snapshot_pdf_blob(conn, snapshot_id, pdf_blob)
+                    set_snapshot_pdf_assets(
+                        conn,
+                        snapshot_id,
+                        pdf_blob=pdf_blob,
+                        pdf_thumbnail_webp=_render_thumbnail_nonfatal(pdf_blob, url=url),
+                    )
             except Exception as exc:
                 logger.warning(
                     "crawler.pdf_render_failed_nonfatal url=%s error=%s",
@@ -118,7 +132,12 @@ def process_document(
             if missing_pdf_snapshot_id:
                 try:
                     pdf_blob = _render_pdf_with_fallback(url, title, clean_text)
-                    set_snapshot_pdf_blob(conn, missing_pdf_snapshot_id, pdf_blob)
+                    set_snapshot_pdf_assets(
+                        conn,
+                        missing_pdf_snapshot_id,
+                        pdf_blob=pdf_blob,
+                        pdf_thumbnail_webp=_render_thumbnail_nonfatal(pdf_blob, url=url),
+                    )
                     logger.info(
                         "crawler.snapshot_pdf_backfilled url=%s snapshot_id=%s",
                         url,

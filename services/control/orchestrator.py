@@ -6,7 +6,6 @@ import time
 from typing import Any
 
 from services.analytics import ANALYTICS_STEP_NAMES, rebuild_analytics
-from services.analytics.bigquery_exporter import export_all_bi_tables
 from services.common.db import get_connection
 from services.control.constants import STAGES_BY_PIPELINE_TYPE, downstream_stages
 from services.control.repository import ControlRepository
@@ -20,6 +19,7 @@ from services.geocoder import (
     process_pending_mentions,
     refresh_canonical_dictionary,
 )
+from services.pipeline.export import configured_export_items, run_configured_export
 
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,30 @@ class ControlOrchestrator:
                 event_type="run_status",
             )
 
+    def _complete_command(
+        self,
+        command: dict[str, Any],
+        status: str,
+        error_message: str | None = None,
+    ) -> None:
+        updated = self.repository.complete_command(
+            command["id"],
+            status,
+            error_message,
+            claim_token=command.get("claim_token"),
+        )
+        if updated is False:
+            logger.warning("control.orchestrator.command_lease_lost command_id=%s", command["id"])
+
+    def _defer_command(self, command: dict[str, Any], payload: dict[str, Any]) -> None:
+        updated = self.repository.defer_command(
+            command["id"],
+            payload,
+            claim_token=command.get("claim_token"),
+        )
+        if updated is False:
+            logger.warning("control.orchestrator.command_lease_lost command_id=%s", command["id"])
+
     def _apply_command(self, command: dict[str, Any]) -> None:
         command_type = command["command_type"]
         payload = dict(command.get("payload_json") or {})
@@ -121,9 +145,9 @@ class ControlOrchestrator:
             elif command_type == "retry_stage":
                 self._apply_retry_stage(command, payload)
             else:
-                self.repository.complete_command(command["id"], "rejected", f"unsupported command {command_type}")
+                self._complete_command(command, "rejected", f"unsupported command {command_type}")
         except Exception as exc:
-            self.repository.complete_command(command["id"], "failed", str(exc))
+            self._complete_command(command, "failed", str(exc))
             logger.exception("control.orchestrator.command_failed command_id=%s", command["id"])
 
     def _apply_start(self, command: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -133,10 +157,11 @@ class ControlOrchestrator:
         if active and not is_deferred:
             self.repository.mark_active_run_cancelling(active["id"])
             payload["deferred"] = True
-            self.repository.defer_command(command["id"], payload)
+            self._defer_command(command, payload)
             return
 
         if active and is_deferred:
+            self._defer_command(command, payload)
             return
 
         run_id = self.repository.create_run(
@@ -155,32 +180,32 @@ class ControlOrchestrator:
             "Run created from start command",
             event_type="run_status",
         )
-        self.repository.complete_command(command["id"], "applied")
+        self._complete_command(command, "applied")
 
     def _apply_cancel(self, command: dict[str, Any]) -> None:
         run_id = command.get("pipeline_run_id")
         if not run_id or not self.repository.run_exists(run_id):
-            self.repository.complete_command(command["id"], "rejected", "run not found")
+            self._complete_command(command, "rejected", "run not found")
             return
 
         run = self.repository.get_run(run_id)
         if run["status"] in ("cancelled", "failed", "success"):
-            self.repository.complete_command(command["id"], "rejected", "run is already terminal")
+            self._complete_command(command, "rejected", "run is already terminal")
             return
 
         self.repository.mark_active_run_cancelling(run_id)
         self.repository.append_log(run_id, None, "pipeline", "INFO", "Cancellation requested", event_type="run_status")
-        self.repository.complete_command(command["id"], "applied")
+        self._complete_command(command, "applied")
 
     def _apply_retry_run(self, command: dict[str, Any], payload: dict[str, Any]) -> None:
         target_run_id = command.get("pipeline_run_id")
         if not target_run_id:
-            self.repository.complete_command(command["id"], "rejected", "missing pipeline_run_id")
+            self._complete_command(command, "rejected", "missing pipeline_run_id")
             return
 
         target = self.repository.get_run(target_run_id)
         if not target:
-            self.repository.complete_command(command["id"], "rejected", "run not found")
+            self._complete_command(command, "rejected", "run not found")
             return
 
         active = self.repository.find_active_run()
@@ -188,16 +213,20 @@ class ControlOrchestrator:
         if active and not is_deferred:
             self.repository.mark_active_run_cancelling(active["id"])
             payload["deferred"] = True
-            self.repository.defer_command(command["id"], payload)
+            self._defer_command(command, payload)
             return
         if active and is_deferred:
+            self._defer_command(command, payload)
             return
 
+        target_parameters = dict(target.get("parameters_json") or {})
+        target_options = dict(target_parameters.get("options") or {})
+        retry_options = dict(payload.get("options") or {})
         new_payload = {
+            **target_parameters,
             "pipeline_type": target["pipeline_type"],
             "target_scope": target["target_scope"],
-            **(target.get("parameters_json") or {}),
-            **(payload.get("options") or {}),
+            "options": {**target_options, **retry_options},
             "replacement_for_run_id": target_run_id,
         }
 
@@ -210,17 +239,17 @@ class ControlOrchestrator:
             created_by_command_id=command["id"],
         )
         self.repository.append_log(run_id, None, "pipeline", "INFO", f"Run created as retry of {target_run_id}", event_type="run_status")
-        self.repository.complete_command(command["id"], "applied")
+        self._complete_command(command, "applied")
 
     def _apply_retry_stage(self, command: dict[str, Any], payload: dict[str, Any]) -> None:
         run_id = command.get("pipeline_run_id")
         stage_name = command.get("stage_name")
         if not run_id or not stage_name:
-            self.repository.complete_command(command["id"], "rejected", "run_id and stage_name required")
+            self._complete_command(command, "rejected", "run_id and stage_name required")
             return
 
         if not self.repository.stage_exists(run_id, stage_name):
-            self.repository.complete_command(command["id"], "rejected", "run or stage not found")
+            self._complete_command(command, "rejected", "run or stage not found")
             return
 
         active = self.repository.find_active_run()
@@ -228,9 +257,10 @@ class ControlOrchestrator:
         if active and not is_deferred:
             self.repository.mark_active_run_cancelling(active["id"])
             payload["deferred"] = True
-            self.repository.defer_command(command["id"], payload)
+            self._defer_command(command, payload)
             return
         if active and is_deferred:
+            self._defer_command(command, payload)
             return
 
         if payload.get("resume"):
@@ -263,7 +293,7 @@ class ControlOrchestrator:
                     event_type="stage_status",
                     payload_json={"stages_reset": downstream_stages(stage_name), "cancel_commands_cleared": cleared},
                 )
-                self.repository.complete_command(command["id"], "applied")
+                self._complete_command(command, "applied")
                 return
 
             cleared = self.repository.reject_pending_cancel_commands(run_id, reason="stale after stage resume")
@@ -295,7 +325,7 @@ class ControlOrchestrator:
                 event_type="stage_status",
                 payload_json={"stages_reset": downstream_stages(stage_name), "cancel_commands_cleared": cleared},
             )
-        self.repository.complete_command(command["id"], "applied")
+        self._complete_command(command, "applied")
 
     def _execute_run(self, run_id: int) -> None:
         run = self.repository.get_run(run_id)
@@ -1090,12 +1120,12 @@ class ControlOrchestrator:
                 )
 
             def on_analytics_detail(step_name: str, processed_items: int, total_items: int) -> None:
-                if step_name != "admin_boundaries":
+                if step_name not in {"admin_boundaries", "presentation_baked_geometry"}:
                     return
                 if total_items <= 0:
-                    label = "admin_boundaries 0/0"
+                    label = f"{step_name} 0/0"
                 else:
-                    label = f"admin_boundaries {processed_items}/{total_items}"
+                    label = f"{step_name} {processed_items}/{total_items}"
                 self.repository.upsert_progress(
                     run_id,
                     stage,
@@ -1111,7 +1141,7 @@ class ControlOrchestrator:
                     stage,
                     "analytics",
                     "INFO",
-                    f"matching {label}",
+                    f"building {label}" if step_name == "presentation_baked_geometry" else f"matching {label}",
                     event_type="progress",
                     current_index=processed,
                 )
@@ -1152,12 +1182,25 @@ class ControlOrchestrator:
             return
 
         if stage == "export":
+            export_tables = configured_export_items()
+            total_tables = len(export_tables)
             progress = self.repository.get_progress_entry(run_id, stage) or {}
             start_index = int(progress.get("items_completed") or 0)
-            if start_index > 3:
-                start_index = 3
+            if start_index > total_tables:
+                start_index = total_tables
             processed = start_index
             failed = 0
+
+            if not export_tables:
+                self.repository.append_log(
+                    run_id,
+                    stage,
+                    "export",
+                    "INFO",
+                    "Optional export skipped: no exporter configured",
+                    event_type="progress",
+                    current_index=0,
+                )
 
             def on_export_table(table_name: str, status: str, error: str | None) -> None:
                 nonlocal processed, failed
@@ -1182,17 +1225,17 @@ class ControlOrchestrator:
                     run_id,
                     stage,
                     current_index=processed + failed,
-                    total_items=3,
+                    total_items=total_tables,
                     items_completed=processed,
                     items_failed=failed,
                     current_item_label=table_name,
-                    message=f"export {processed + failed}/3",
+                    message=f"export {processed + failed}/{total_tables}",
                 )
                 self.repository.set_stage_status(
                     run_id,
                     stage,
                     "running",
-                    items_total=3,
+                    items_total=total_tables,
                     items_completed=processed,
                     items_failed=failed,
                 )
@@ -1203,16 +1246,16 @@ class ControlOrchestrator:
                     stage,
                     "export",
                     "INFO",
-                    f"Resume mode: continue from step {start_index}/3",
+                    f"Resume mode: continue from step {start_index}/{total_tables}",
                     event_type="progress",
                     current_index=start_index,
                 )
-            export_all_bi_tables(mode="incremental", on_table=on_export_table, start_index=start_index)
+            run_configured_export(mode="incremental", on_item=on_export_table, start_index=start_index)
             self.repository.upsert_progress(
                 run_id,
                 stage,
                 current_index=processed + failed,
-                total_items=3,
+                total_items=total_tables,
                 items_completed=processed,
                 items_failed=failed,
                 message="export stage completed",
@@ -1221,7 +1264,7 @@ class ControlOrchestrator:
                 run_id,
                 stage,
                 "running",
-                items_total=3,
+                items_total=total_tables,
                 items_completed=processed,
                 items_failed=failed,
             )

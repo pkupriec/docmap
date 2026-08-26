@@ -117,7 +117,7 @@ def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_co
 
     class DummyCursor:
         def __init__(self) -> None:
-            self.inserted: list[tuple[str, str, str]] = []
+            self.inserted: list[tuple[str, str, str, float, float, float, float]] = []
             self.truncated = False
 
         def __enter__(self):
@@ -164,6 +164,7 @@ def test_build_admin_boundaries_asset_generates_location_id_keyed_geojson_and_co
     assert coverage_payload["unmatched"]["continent"] == ["Europe"]
     assert conn.cursor_instance.truncated is True
     assert len(conn.cursor_instance.inserted) == 3
+    assert conn.cursor_instance.inserted[0][3:] == (0.0, 0.0, 1.0, 1.0)
 
 
 def test_dedupe_alias_targets_keeps_distinct_entities() -> None:
@@ -208,6 +209,108 @@ def test_select_feature_prefers_canonical_id_before_alias() -> None:
 
     assert matched is feature
     assert strategy == "canonical_id"
+
+
+def test_select_feature_merges_generic_ocean_alias_matches_across_hemispheres() -> None:
+    north_feature = {
+        "type": "Feature",
+        "properties": {
+            "canonical_id": "ne:ocean:atlantic ocean",
+            "location_rank": "ocean",
+            "location_name": "Atlantic Ocean",
+            "aliases": ["Atlantic Ocean", "NORTH ATLANTIC OCEAN"],
+        },
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[-40.0, 0.1], [-20.0, 0.1], [-20.0, 10.0], [-40.0, 0.1]]],
+        },
+    }
+    south_feature = {
+        "type": "Feature",
+        "properties": {
+            "canonical_id": "ne:ocean:atlantic ocean",
+            "location_rank": "ocean",
+            "location_name": "Atlantic Ocean",
+            "aliases": ["Atlantic Ocean", "SOUTH ATLANTIC OCEAN"],
+        },
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[-30.0, -10.0], [-10.0, -10.0], [-10.0, -0.1], [-30.0, -10.0]]],
+        },
+    }
+    target = _target(
+        location_id="loc-atlantic",
+        location_name="Atlantic Ocean",
+        location_rank="ocean",
+        country_name=None,
+    )
+    by_location_id, by_canonical_id, by_osm, by_rank_alias, by_region_pair = geometry_assets._index_source_features(
+        [north_feature, south_feature]
+    )
+
+    matched, strategy = geometry_assets._select_feature_for_target(
+        target,
+        by_location_id=by_location_id,
+        by_canonical_id=by_canonical_id,
+        by_osm=by_osm,
+        by_rank_alias=by_rank_alias,
+        by_region_pair=by_region_pair,
+    )
+
+    assert matched is not None
+    assert strategy == "rank_alias_merged"
+    assert matched["geometry"]["type"] == "MultiPolygon"
+    assert len(matched["geometry"]["coordinates"]) == 2
+
+
+def test_select_feature_keeps_specific_ocean_alias_single_part() -> None:
+    north_feature = {
+        "type": "Feature",
+        "properties": {
+            "canonical_id": "ne:ocean:atlantic ocean",
+            "location_rank": "ocean",
+            "location_name": "Atlantic Ocean",
+            "aliases": ["Atlantic Ocean", "NORTH ATLANTIC OCEAN"],
+        },
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[-40.0, 0.1], [-20.0, 0.1], [-20.0, 10.0], [-40.0, 0.1]]],
+        },
+    }
+    south_feature = {
+        "type": "Feature",
+        "properties": {
+            "canonical_id": "ne:ocean:atlantic ocean",
+            "location_rank": "ocean",
+            "location_name": "Atlantic Ocean",
+            "aliases": ["Atlantic Ocean", "SOUTH ATLANTIC OCEAN"],
+        },
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[-30.0, -10.0], [-10.0, -10.0], [-10.0, -0.1], [-30.0, -10.0]]],
+        },
+    }
+    target = _target(
+        location_id="loc-north-atlantic",
+        location_name="North Atlantic Ocean",
+        location_rank="ocean",
+        country_name=None,
+    )
+    by_location_id, by_canonical_id, by_osm, by_rank_alias, by_region_pair = geometry_assets._index_source_features(
+        [north_feature, south_feature]
+    )
+
+    matched, strategy = geometry_assets._select_feature_for_target(
+        target,
+        by_location_id=by_location_id,
+        by_canonical_id=by_canonical_id,
+        by_osm=by_osm,
+        by_rank_alias=by_rank_alias,
+        by_region_pair=by_region_pair,
+    )
+
+    assert matched is north_feature
+    assert strategy == "rank_alias_merged"
 
 
 def test_infer_rank_from_row_prefers_precision_over_admin_level() -> None:

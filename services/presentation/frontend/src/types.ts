@@ -5,6 +5,8 @@ export type LocationRank =
   | "country"
   | "continent"
   | "ocean"
+  | "national_park"
+  | "desert"
   | "unknown";
 
 export type Location = {
@@ -25,6 +27,7 @@ export type DocumentCard = {
   scp_url: string;
   location_display: string | null;
   pdf_url: string | null;
+  thumbnail_url?: string | null;
 };
 
 export type LocationDocumentsResponse = {
@@ -86,9 +89,23 @@ export type BoundaryCollection = {
 };
 
 export type BoundariesRequestOptions = {
-  lite?: boolean;
-  rank_filter?: "default" | "all";
-  geometry_detail?: "low" | "full";
+  selected_location_id?: string | null;
+  highlighted_location_ids?: string[];
+};
+
+export type BakedManifest = {
+  schema_version: string;
+  version: string;
+  mode: string;
+  default_mode: string;
+  available_modes: string[];
+  min_zoom: number;
+  max_zoom: number;
+  tile_format: string;
+  tolerance_by_zoom_band: Record<string, number>;
+  archive_url: string;
+  mode_path: string;
+  manifest_path: string;
 };
 
 export type MapViewport = {

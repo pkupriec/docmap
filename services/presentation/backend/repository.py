@@ -1,22 +1,22 @@
 from __future__ import annotations
 
-import json
 import logging
-import os
+import math
+import re
 import time
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
+from psycopg import Connection
+
 from services.common.db import get_connection
+from services.presentation.backend.boundaries_repository import BoundariesRepository
 
 logger = logging.getLogger(__name__)
-
-RankFilter = Literal["default", "all"]
-GeometryDetail = Literal["low", "full"]
-DEFAULT_BOUNDARY_RANKS: set[str] = {"city", "admin_region", "region", "country", "continent", "ocean"}
+_WHITESPACE_RE = re.compile(r"\s+")
+ConnectionProvider = Callable[[], AbstractContextManager[Connection]]
 
 
 @dataclass(frozen=True)
@@ -34,20 +34,19 @@ class ScopedLocationDocuments:
     items: list[dict[str, Any]]
 
 
-class PresentationRepository:
-    def _project_root(self) -> Path:
-        return Path(__file__).resolve().parents[3]
+@dataclass(frozen=True)
+class LocationDocumentsResult:
+    resolved: ResolvedLocation | None
+    location_display: str | None
+    scoped: ScopedLocationDocuments | None
 
-    def _low_detail_artifact_paths(self) -> list[Path]:
-        configured = os.getenv("DOCMAP_BOUNDARIES_LOW_ARTIFACT_PATH")
-        if configured:
-            return [Path(configured)]
-        root = self._project_root()
-        return [
-            root / "services" / "presentation" / "frontend" / "src" / "assets" / "admin_boundaries.geojson",
-            Path("/app/services/presentation/frontend/src/assets/admin_boundaries.geojson"),
-            Path("/app/services/analytics/assets/admin_boundaries.low.default.v1.geojson"),
-        ]
+
+class PresentationRepository(BoundariesRepository):
+    def __init__(self, connection_provider: ConnectionProvider | None = None) -> None:
+        super().__init__(connection_provider or get_connection)
+
+    def _normalize_text(self, value: object | None) -> str:
+        return _WHITESPACE_RE.sub(" ", str(value or "").strip().lower())
 
     def _normalize_rank(self, rank: object | None) -> str:
         value = str(rank or "unknown").strip().lower()
@@ -55,243 +54,179 @@ class PresentationRepository:
             return "admin_region"
         return value or "unknown"
 
-    def _geometry_supported(self, geometry: object) -> bool:
-        if not isinstance(geometry, dict):
-            return False
-        return geometry.get("type") in {"Polygon", "MultiPolygon"}
+    def _semantic_city_key(self, row: dict[str, Any]) -> tuple[str, str, str, float, float] | None:
+        precision = self._normalize_text(row.get("precision"))
+        if precision != "city":
+            return None
+        latitude = row.get("latitude")
+        longitude = row.get("longitude")
+        if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+            return None
+        if not math.isfinite(float(latitude)) or not math.isfinite(float(longitude)):
+            return None
 
-    def _simplify_ring(self, ring: list[list[float]], stride: int) -> list[list[float]]:
-        if stride <= 1 or len(ring) <= 4:
-            return ring
-        is_closed = ring[0] == ring[-1]
-        core = ring[:-1] if is_closed else ring
-        if len(core) <= 3:
-            return ring
-        reduced = [core[0]]
-        for idx in range(1, len(core) - 1):
-            if idx % stride == 0:
-                reduced.append(core[idx])
-        reduced.append(core[-1])
-        if len(reduced) < 3:
-            reduced = core[:]
-        if is_closed:
-            if reduced[0] != reduced[-1]:
-                reduced.append(reduced[0])
-            if len(reduced) < 4:
-                reduced = core[:] + [core[0]]
+        region = self._normalize_text(row.get("region"))
+        country = self._normalize_text(row.get("country"))
+        parts = [self._normalize_text(part) for part in str(row.get("name") or row.get("normalized_location") or "").split(",")]
+        parts = [part for part in parts if part]
+        removable = {region, country}
+        while parts and parts[-1] in removable:
+            parts.pop()
+        base_name = ", ".join(parts)
+        if not base_name:
+            return None
+        return (base_name, region, country, round(float(latitude), 5), round(float(longitude), 5))
+
+    def _location_row_sort_key(self, row: dict[str, Any]) -> tuple[Any, ...]:
+        name = str(row.get("name") or row.get("normalized_location") or "")
+        rank = self._normalize_rank(row.get("location_rank"))
+        return (
+            int(row.get("rank_bucket") or 99),
+            -int(row.get("document_count") or 0),
+            0 if rank != "unknown" else 1,
+            len(name),
+            name.lower(),
+            str(row.get("location_id") or ""),
+        )
+
+    def _reduce_semantic_city_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        grouped: dict[tuple[str, str, str, float, float], list[dict[str, Any]]] = {}
+        passthrough: list[dict[str, Any]] = []
+        for row in rows:
+            key = self._semantic_city_key(row)
+            if key is None:
+                passthrough.append(row)
+                continue
+            grouped.setdefault(key, []).append(row)
+
+        reduced = passthrough[:]
+        for group_rows in grouped.values():
+            if len(group_rows) == 1:
+                reduced.append(group_rows[0])
+                continue
+            preferred = min(group_rows, key=self._location_row_sort_key)
+            merged = dict(preferred)
+            merged["document_count"] = sum(int(item.get("document_count") or 0) for item in group_rows)
+            reduced.append(merged)
+
+        reduced.sort(key=self._location_row_sort_key)
         return reduced
 
-    def _simplify_geometry(self, geometry: dict[str, Any], *, rank: str) -> dict[str, Any]:
-        stride_by_rank: dict[str, int] = {
-            "city": 2,
-            "admin_region": 4,
-            "country": 8,
-            "continent": 12,
-            "ocean": 12,
-        }
-        stride = stride_by_rank.get(rank, 6)
-        geometry_type = geometry.get("type")
-        coordinates = geometry.get("coordinates")
-        if geometry_type == "Polygon" and isinstance(coordinates, list):
-            return {
-                "type": "Polygon",
-                "coordinates": [
-                    self._simplify_ring(ring, stride) if isinstance(ring, list) else ring
-                    for ring in coordinates
-                ],
-            }
-        if geometry_type == "MultiPolygon" and isinstance(coordinates, list):
-            simplified_polygons: list[list[list[list[float]]]] = []
-            for polygon in coordinates:
-                if not isinstance(polygon, list):
-                    continue
-                simplified_polygons.append(
-                    [self._simplify_ring(ring, stride) if isinstance(ring, list) else ring for ring in polygon]
-                )
-            return {
-                "type": "MultiPolygon",
-                "coordinates": simplified_polygons,
-            }
-        return geometry
-
-    def _parse_feature_row(self, payload: object) -> dict[str, Any] | None:
-        if isinstance(payload, dict):
-            parsed = payload
-        elif isinstance(payload, (str, bytes, bytearray)):
-            try:
-                parsed = json.loads(payload)
-            except json.JSONDecodeError:
-                return None
-            if not isinstance(parsed, dict):
-                return None
-        else:
-            return None
-        geometry = parsed.get("geometry")
-        if not self._geometry_supported(geometry):
-            return None
-        return parsed
-
-    def _serialize_feature(
-        self,
-        parsed: dict[str, Any],
-        *,
-        minimal: bool,
-        geometry_detail: GeometryDetail,
-    ) -> dict[str, Any] | None:
-        geometry = parsed.get("geometry")
-        if not isinstance(geometry, dict):
-            return None
-        raw_properties = parsed.get("properties")
-        properties = raw_properties if isinstance(raw_properties, dict) else {}
-        rank = self._normalize_rank(properties.get("location_rank"))
-        output_geometry = (
-            self._simplify_geometry(geometry, rank=rank) if geometry_detail == "low" else geometry
-        )
-        if minimal:
-            return {
-                "type": "Feature",
-                "properties": {
-                    "location_id": properties.get("location_id"),
-                    "location_name": properties.get("location_name"),
-                    "location_rank": properties.get("location_rank"),
-                    "country_name": properties.get("country_name"),
-                    "region_name": properties.get("region_name"),
-                    "aliases": properties.get("aliases"),
-                    "safe_aliases": properties.get("safe_aliases"),
-                    "country_aliases": properties.get("country_aliases"),
-                    "region_aliases": properties.get("region_aliases"),
-                    "match_strategy": properties.get("match_strategy"),
-                },
-                "geometry": {
-                    "type": output_geometry.get("type"),
-                    "coordinates": output_geometry.get("coordinates"),
-                },
-            }
-        return {
-            "type": "Feature",
-            "properties": properties,
-            "geometry": {
-                "type": output_geometry.get("type"),
-                "coordinates": output_geometry.get("coordinates"),
-            },
-        }
-
-    def _rank_allowed(self, rank: str, rank_filter: RankFilter) -> bool:
-        if rank_filter == "all":
-            return True
-        return rank in DEFAULT_BOUNDARY_RANKS
-
-    def _load_low_detail_default_artifact(self, *, minimal: bool) -> dict[str, Any] | None:
-        for candidate in self._low_detail_artifact_paths():
-            if not candidate.exists() or not candidate.is_file():
-                continue
-            try:
-                payload = json.loads(candidate.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            features_payload = payload.get("features")
-            if not isinstance(features_payload, list):
-                continue
-            artifact_start = time.perf_counter()
-            features: list[dict[str, Any]] = []
-            for feature in features_payload:
-                if not isinstance(feature, dict):
-                    continue
-                properties = feature.get("properties")
-                if not isinstance(properties, dict):
-                    continue
-                rank = self._normalize_rank(properties.get("location_rank"))
-                if not self._rank_allowed(rank, "default"):
-                    continue
-                serialized = self._serialize_feature(feature, minimal=minimal, geometry_detail="low")
-                if serialized is None:
-                    continue
-                features.append(serialized)
-            logger.info(
-                "presentation.boundaries_artifact_loaded path=%s minimal=%s features=%s duration_ms=%.2f",
-                candidate,
-                minimal,
-                len(features),
-                (time.perf_counter() - artifact_start) * 1000.0,
-            )
-            return {
-                "type": "FeatureCollection",
-                "features": features,
-            }
-        return None
-
-    def get_admin_boundaries_geojson(
-        self,
-        *,
-        minimal: bool = False,
-        rank_filter: RankFilter = "default",
-        geometry_detail: GeometryDetail = "full",
-    ) -> dict[str, Any]:
-        if rank_filter == "default" and geometry_detail == "low":
-            artifact = self._load_low_detail_default_artifact(minimal=minimal)
-            if artifact is not None:
-                return artifact
-
-        total_start = time.perf_counter()
+    def _get_location_row(self, location_id: Any) -> dict[str, Any] | None:
         sql = """
-            SELECT feature_json
-            FROM bi_admin_boundaries
-            ORDER BY
-                CASE location_rank
-                    WHEN 'city' THEN 0
-                    WHEN 'country' THEN 0
-                    WHEN 'admin_region' THEN 1
-                    WHEN 'continent' THEN 2
-                    WHEN 'ocean' THEN 3
-                    ELSE 9
-                END,
-                location_id ASC
+            SELECT
+                bl.location_id,
+                bl.normalized_location,
+                bl.country,
+                bl.region,
+                bl.city,
+                bl.latitude,
+                bl.longitude,
+                bl.precision,
+                bl.location_rank,
+                COALESCE(bl.document_count, 0) AS document_count
+            FROM bi_locations bl
+            WHERE bl.location_id = %(location_id)s
+            LIMIT 1
         """
-        db_start = time.perf_counter()
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql)
-                rows = cur.fetchall()
-        db_elapsed_ms = (time.perf_counter() - db_start) * 1000.0
-        transform_start = time.perf_counter()
-        features: list[dict[str, Any]] = []
+                cur.execute(sql, {"location_id": location_id})
+                row = cur.fetchone()
+                columns = [d[0] for d in cur.description] if row is not None else []
+        if row is None:
+            return None
+        payload = dict(zip(columns, row, strict=True))
+        payload["name"] = payload["normalized_location"]
+        return payload
+
+    def _list_semantic_city_peer_rows(self, location_row: dict[str, Any]) -> list[dict[str, Any]]:
+        key = self._semantic_city_key(location_row)
+        if key is None:
+            return [location_row]
+        sql = """
+            SELECT
+                bl.location_id,
+                bl.normalized_location,
+                bl.country,
+                bl.region,
+                bl.city,
+                bl.latitude,
+                bl.longitude,
+                bl.precision,
+                bl.location_rank,
+                COALESCE(bl.document_count, 0) AS document_count
+            FROM bi_locations bl
+            WHERE
+                bl.precision = 'city'
+                AND LOWER(COALESCE(bl.country, '')) = LOWER(COALESCE(%(country)s, ''))
+                AND LOWER(COALESCE(bl.region, '')) = LOWER(COALESCE(%(region)s, ''))
+                AND ROUND(CAST(bl.latitude AS numeric), 5) = ROUND(CAST(%(latitude)s AS numeric), 5)
+                AND ROUND(CAST(bl.longitude AS numeric), 5) = ROUND(CAST(%(longitude)s AS numeric), 5)
+            ORDER BY bl.location_id ASC
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    {
+                        "country": location_row.get("country"),
+                        "region": location_row.get("region"),
+                        "latitude": location_row.get("latitude"),
+                        "longitude": location_row.get("longitude"),
+                    },
+                )
+                columns = [d[0] for d in cur.description]
+                rows = [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
         for row in rows:
-            parsed = self._parse_feature_row(row[0] if row else None)
-            if parsed is None:
-                continue
-            properties = parsed.get("properties")
-            if not isinstance(properties, dict):
-                continue
-            rank = self._normalize_rank(properties.get("location_rank"))
-            if not self._rank_allowed(rank, rank_filter):
-                continue
-            serialized = self._serialize_feature(
-                parsed,
-                minimal=minimal,
-                geometry_detail=geometry_detail,
+            row["name"] = row["normalized_location"]
+        peers = [row for row in rows if self._semantic_city_key(row) == key]
+        if not peers:
+            return [location_row]
+        peers.sort(key=self._location_row_sort_key)
+        return peers
+
+    def get_semantic_scope_location_ids(self, location_id: Any, *, scope_rank: str) -> list[str]:
+        if str(scope_rank).lower() != "city":
+            return []
+        location_row = self._get_location_row(location_id)
+        if location_row is None:
+            return []
+        return [str(row["location_id"]) for row in self._list_semantic_city_peer_rows(location_row)]
+
+    def get_location_documents(
+        self,
+        location_id: Any,
+        *,
+        limit: int,
+        offset: int,
+    ) -> LocationDocumentsResult:
+        """Resolve a location and fetch its page using one checked-out connection."""
+        with self._connect() as conn:
+            repo = PresentationRepository(lambda: nullcontext(conn))
+            resolved = repo.resolve_location_for_documents(location_id)
+            if resolved is None:
+                return LocationDocumentsResult(resolved=None, location_display=None, scoped=None)
+            resolved_uuid = UUID(resolved.location_id)
+            semantic_ids = repo.get_semantic_scope_location_ids(
+                resolved_uuid,
+                scope_rank=resolved.location_rank,
             )
-            if serialized is None:
-                continue
-            features.append(serialized)
-        total_elapsed_ms = (time.perf_counter() - total_start) * 1000.0
-        transform_elapsed_ms = (time.perf_counter() - transform_start) * 1000.0
-        logger.info(
-            "presentation.boundaries_repo_fetch minimal=%s rank_filter=%s geometry_detail=%s rows=%s features=%s db_ms=%.2f transform_ms=%.2f total_ms=%.2f",
-            minimal,
-            rank_filter,
-            geometry_detail,
-            len(rows),
-            len(features),
-            db_elapsed_ms,
-            transform_elapsed_ms,
-            total_elapsed_ms,
-        )
-        return {
-            "type": "FeatureCollection",
-            "features": features,
-        }
+            scoped = repo.list_location_documents(
+                resolved_uuid,
+                scope_rank=resolved.location_rank,
+                limit=limit,
+                offset=offset,
+                semantic_scope_location_ids=semantic_ids,
+            )
+            return LocationDocumentsResult(
+                resolved=resolved,
+                location_display=repo.get_location_name(resolved_uuid),
+                scoped=scoped,
+            )
 
     def list_locations(self) -> list[dict[str, Any]]:
+        start = time.perf_counter()
         sql = """
             SELECT
                 bl.location_id,
@@ -312,14 +247,43 @@ class PresentationRepository:
                 AND bl.longitude BETWEEN -180 AND 180
             ORDER BY bl.document_count DESC, bl.normalized_location ASC, bl.location_id ASC
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql)
                 columns = [d[0] for d in cur.description]
                 rows = cur.fetchall()
-        return [dict(zip(columns, row, strict=True)) for row in rows]
+        reduced_rows = self._reduce_semantic_city_rows([dict(zip(columns, row, strict=True)) for row in rows])
+        logger.info(
+            "presentation.locations_repo_fetch rows=%s reduced_rows=%s total_ms=%.2f",
+            len(rows),
+            len(reduced_rows),
+            (time.perf_counter() - start) * 1000.0,
+        )
+        return reduced_rows
 
     def resolve_location_for_documents(self, location_id: Any) -> ResolvedLocation | None:
+        start = time.perf_counter()
+        requested_row = self._get_location_row(location_id)
+        if requested_row is not None and self._semantic_city_key(requested_row) is not None:
+            semantic_peers = self._list_semantic_city_peer_rows(requested_row)
+            preferred = semantic_peers[0]
+            fallback_depth = 0 if str(preferred["location_id"]) == str(location_id) else 1
+            resolved = ResolvedLocation(
+                location_id=str(preferred["location_id"]),
+                depth=fallback_depth,
+                location_rank="city",
+            )
+            logger.info(
+                "presentation.resolve_location_for_documents requested_location_id=%s resolved_location_id=%s depth=%s scope_rank=%s semantic_peer_count=%s total_ms=%.2f",
+                location_id,
+                resolved.location_id,
+                resolved.depth,
+                resolved.location_rank,
+                len(semantic_peers),
+                (time.perf_counter() - start) * 1000.0,
+            )
+            return resolved
+
         sql = """
             WITH requested AS (
                 SELECT
@@ -403,13 +367,27 @@ class PresentationRepository:
             FROM ordered o
             WHERE o.rn = 1
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"location_id": location_id})
                 row = cur.fetchone()
         if row is None:
+            logger.info(
+                "presentation.resolve_location_for_documents requested_location_id=%s resolved_location_id=None total_ms=%.2f",
+                location_id,
+                (time.perf_counter() - start) * 1000.0,
+            )
             return None
-        return ResolvedLocation(location_id=str(row[0]), depth=int(row[1]), location_rank=str(row[2]))
+        resolved = ResolvedLocation(location_id=str(row[0]), depth=int(row[1]), location_rank=str(row[2]))
+        logger.info(
+            "presentation.resolve_location_for_documents requested_location_id=%s resolved_location_id=%s depth=%s scope_rank=%s total_ms=%.2f",
+            location_id,
+            resolved.location_id,
+            resolved.depth,
+            resolved.location_rank,
+            (time.perf_counter() - start) * 1000.0,
+        )
+        return resolved
 
     def get_location_name(self, location_id: Any) -> str | None:
         sql = """
@@ -418,7 +396,7 @@ class PresentationRepository:
             WHERE bl.location_id = %(location_id)s
             LIMIT 1
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"location_id": location_id})
                 row = cur.fetchone()
@@ -433,26 +411,32 @@ class PresentationRepository:
         scope_rank: str,
         limit: int,
         offset: int,
+        semantic_scope_location_ids: list[Any] | None = None,
     ) -> ScopedLocationDocuments:
         scope_rank_normalized = str(scope_rank).lower()
+        start = time.perf_counter()
         if scope_rank_normalized == "region":
             scope_rank_normalized = "admin_region"
 
-        if scope_rank_normalized == "city":
-            rank_filter = ("city",)
+        city_scope_ids = [str(item) for item in semantic_scope_location_ids or [] if item is not None]
+        if scope_rank_normalized == "city" and city_scope_ids:
+            scope_locations_sql = """
+                SELECT DISTINCT UNNEST(%s::uuid[]) AS location_id
+            """
+            base_params: list[Any] = [city_scope_ids]
         else:
-            rank_filter = ()
+            if scope_rank_normalized == "city":
+                rank_filter = ("city",)
+            else:
+                rank_filter = ()
 
-        rank_filter_sql = ", ".join(["%s"] * len(rank_filter)) if rank_filter else ""
-        params: list[Any] = [location_id, *rank_filter]
-        rank_clause = (
-            f"AND COALESCE(NULLIF(LOWER(bl.location_rank), ''), 'unknown') IN ({rank_filter_sql})"
-            if rank_filter
-            else ""
-        )
-
-        scope_sql = f"""
-            WITH scope_locations AS (
+            rank_filter_sql = ", ".join(["%s"] * len(rank_filter)) if rank_filter else ""
+            rank_clause = (
+                f"AND COALESCE(NULLIF(LOWER(bl.location_rank), ''), 'unknown') IN ({rank_filter_sql})"
+                if rank_filter
+                else ""
+            )
+            scope_locations_sql = f"""
                 SELECT
                     h.descendant_location_id AS location_id
                 FROM bi_location_hierarchy h
@@ -460,6 +444,12 @@ class PresentationRepository:
                 WHERE
                     h.ancestor_location_id = %s
                     {rank_clause}
+            """
+            base_params = [location_id, *rank_filter]
+
+        scope_sql = f"""
+            WITH scope_locations AS (
+                {scope_locations_sql}
             ),
             scope_counts AS (
                 SELECT COUNT(DISTINCT sl.location_id) AS location_count
@@ -495,10 +485,15 @@ class PresentationRepository:
                     WHEN bd.latest_snapshot_id IS NOT NULL THEN '/api/map/document/' || bd.document_id || '/pdf'
                     ELSE NULL
                 END AS pdf_url,
+                CASE
+                    WHEN ds.pdf_thumbnail_webp IS NOT NULL THEN '/api/map/document/' || bd.document_id || '/thumbnail'
+                    ELSE NULL
+                END AS thumbnail_url,
                 dc.total_items,
                 sc.location_count
             FROM page_docs pd
             JOIN bi_documents bd ON bd.document_id = pd.document_id
+            LEFT JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
             CROSS JOIN doc_counts dc
             CROSS JOIN scope_counts sc
             ORDER BY
@@ -507,27 +502,21 @@ class PresentationRepository:
                 bd.url ASC,
                 bd.document_id ASC
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(scope_sql, [*params, limit, offset])
+                cur.execute(scope_sql, [*base_params, limit, offset])
                 columns = [d[0] for d in cur.description]
                 rows = [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
 
                 cur.execute(
                     f"""
                     WITH scope_locations AS (
-                        SELECT
-                            h.descendant_location_id AS location_id
-                        FROM bi_location_hierarchy h
-                        JOIN bi_locations bl ON bl.location_id = h.descendant_location_id
-                        WHERE
-                            h.ancestor_location_id = %s
-                            {rank_clause}
+                        {scope_locations_sql}
                     )
                     SELECT COUNT(DISTINCT sl.location_id) AS location_count
                     FROM scope_locations sl
                     """,
-                    [location_id, *rank_filter],
+                    base_params,
                 )
                 scope_row = cur.fetchone()
                 location_count = int(scope_row[0]) if scope_row is not None and scope_row[0] is not None else 0
@@ -535,13 +524,7 @@ class PresentationRepository:
                 cur.execute(
                     f"""
                     WITH scope_locations AS (
-                        SELECT
-                            h.descendant_location_id AS location_id
-                        FROM bi_location_hierarchy h
-                        JOIN bi_locations bl ON bl.location_id = h.descendant_location_id
-                        WHERE
-                            h.ancestor_location_id = %s
-                            {rank_clause}
+                        {scope_locations_sql}
                     ),
                     scoped_docs AS (
                         SELECT DISTINCT bdl.document_id
@@ -551,7 +534,7 @@ class PresentationRepository:
                     SELECT COUNT(*) AS total_items
                     FROM scoped_docs
                     """,
-                    [location_id, *rank_filter],
+                    base_params,
                 )
                 count_row = cur.fetchone()
                 total_items = int(count_row[0]) if count_row is not None and count_row[0] is not None else 0
@@ -563,9 +546,22 @@ class PresentationRepository:
                 "canonical_scp_id": row["canonical_scp_id"],
                 "scp_url": row["scp_url"],
                 "pdf_url": row["pdf_url"],
+                "thumbnail_url": row["thumbnail_url"],
             }
             for row in rows
         ]
+        logger.info(
+            "presentation.location_documents_repo_fetch location_id=%s scope_rank=%s semantic_scope_size=%s location_count=%s total_items=%s returned_items=%s limit=%s offset=%s total_ms=%.2f",
+            location_id,
+            scope_rank_normalized,
+            len(city_scope_ids),
+            location_count,
+            total_items,
+            len(items),
+            limit,
+            offset,
+            (time.perf_counter() - start) * 1000.0,
+        )
         return ScopedLocationDocuments(
             scope_rank=scope_rank_normalized,
             location_count=location_count,
@@ -574,6 +570,7 @@ class PresentationRepository:
         )
 
     def list_document_locations(self, document_id: Any) -> list[dict[str, Any]]:
+        start = time.perf_counter()
         sql = """
             SELECT
                 bdl.document_id,
@@ -596,12 +593,19 @@ class PresentationRepository:
                 AND bl.longitude BETWEEN -180 AND 180
             ORDER BY bdl.mention_count DESC, bl.normalized_location ASC, bl.location_id ASC
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"document_id": document_id})
                 columns = [d[0] for d in cur.description]
                 rows = cur.fetchall()
-        return [dict(zip(columns, row, strict=True)) for row in rows]
+        payload = [dict(zip(columns, row, strict=True)) for row in rows]
+        logger.info(
+            "presentation.document_locations_repo_fetch document_id=%s rows=%s total_ms=%.2f",
+            document_id,
+            len(payload),
+            (time.perf_counter() - start) * 1000.0,
+        )
+        return payload
 
     def list_density_points(self) -> list[dict[str, Any]]:
         sql = """
@@ -619,7 +623,7 @@ class PresentationRepository:
                 AND bl.longitude BETWEEN -180 AND 180
             ORDER BY bl.document_count DESC, bl.location_id ASC
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql)
                 columns = [d[0] for d in cur.description]
@@ -648,15 +652,20 @@ class PresentationRepository:
                 CASE
                     WHEN bd.latest_snapshot_id IS NOT NULL THEN '/api/map/document/' || bd.document_id || '/pdf'
                     ELSE NULL
-                END AS pdf_url
+                END AS pdf_url,
+                CASE
+                    WHEN ds.pdf_thumbnail_webp IS NOT NULL THEN '/api/map/document/' || bd.document_id || '/thumbnail'
+                    ELSE NULL
+                END AS thumbnail_url
             FROM bi_documents bd
+            LEFT JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
             LEFT JOIN top_location tl
                 ON tl.document_id = bd.document_id
                 AND tl.rn = 1
             WHERE bd.document_id = %(document_id)s
             LIMIT 1
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"document_id": document_id})
                 row = cur.fetchone()
@@ -674,7 +683,7 @@ class PresentationRepository:
               AND ds.pdf_blob IS NOT NULL
             LIMIT 1
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"document_id": document_id})
                 row = cur.fetchone()
@@ -682,9 +691,65 @@ class PresentationRepository:
             return None
         return bytes(row[0])
 
+    def get_document_thumbnail(self, document_id: UUID) -> bytes | None:
+        sql = """
+            SELECT ds.pdf_thumbnail_webp
+            FROM bi_documents bd
+            JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
+            WHERE bd.document_id = %(document_id)s
+              AND ds.pdf_thumbnail_webp IS NOT NULL
+            LIMIT 1
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, {"document_id": document_id})
+                row = cur.fetchone()
+        return bytes(row[0]) if row is not None else None
+
+    def get_document_pdf_size(self, document_id: UUID) -> int | None:
+        sql = """
+            SELECT OCTET_LENGTH(ds.pdf_blob)
+            FROM bi_documents bd
+            JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
+            WHERE bd.document_id = %(document_id)s
+              AND ds.pdf_blob IS NOT NULL
+            LIMIT 1
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, {"document_id": document_id})
+                row = cur.fetchone()
+        return int(row[0]) if row is not None else None
+
+    def get_document_pdf_range(self, document_id: UUID, *, start: int, length: int) -> bytes | None:
+        """Read only the requested bytea slice; PostgreSQL need not send the full PDF."""
+        sql = """
+            SELECT SUBSTRING(ds.pdf_blob FROM %(sql_start)s FOR %(length)s)
+            FROM bi_documents bd
+            JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
+            WHERE bd.document_id = %(document_id)s
+              AND ds.pdf_blob IS NOT NULL
+            LIMIT 1
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    {"document_id": document_id, "sql_start": start + 1, "length": length},
+                )
+                row = cur.fetchone()
+        return bytes(row[0]) if row is not None else None
+
     def search(self, query: str, limit: int) -> dict[str, list[dict[str, Any]]]:
+        start = time.perf_counter()
         normalized = query.strip().lower()
         if len(normalized) < 3:
+            logger.info(
+                "presentation.search_repo_fetch query_length=%s limit=%s document_rows=0 location_rows=0 reduced_location_rows=0 total_ms=%.2f",
+                len(normalized),
+                limit,
+                (time.perf_counter() - start) * 1000.0,
+            )
             return {"documents": [], "locations": []}
 
         canonical_exact = normalized
@@ -717,6 +782,10 @@ class PresentationRepository:
                         ELSE NULL
                     END AS pdf_url,
                     CASE
+                        WHEN ds.pdf_thumbnail_webp IS NOT NULL THEN '/api/map/document/' || bd.document_id || '/thumbnail'
+                        ELSE NULL
+                    END AS thumbnail_url,
+                    CASE
                         WHEN LOWER(bd.canonical_number) = %(canonical_exact)s THEN 0
                         WHEN %(numeric_only)s::text IS NOT NULL
                             AND REPLACE(LOWER(bd.canonical_number), 'scp-', '') = %(numeric_only)s::text THEN 1
@@ -729,6 +798,7 @@ class PresentationRepository:
                         ELSE 9
                     END AS rank_bucket
                 FROM bi_documents bd
+                LEFT JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
                 LEFT JOIN top_location tl ON tl.document_id = bd.document_id AND tl.rn = 1
                 WHERE
                     LOWER(bd.canonical_number) = %(canonical_exact)s
@@ -752,6 +822,7 @@ class PresentationRepository:
                 dm.scp_url,
                 dm.location_display,
                 dm.pdf_url,
+                dm.thumbnail_url,
                 dm.rank_bucket
             FROM document_matches dm
             ORDER BY
@@ -825,15 +896,27 @@ class PresentationRepository:
             "numeric_prefix": numeric_prefix,
             "limit": limit,
         }
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(document_sql, params)
                 doc_columns = [d[0] for d in cur.description]
                 doc_rows = [dict(zip(doc_columns, row, strict=True)) for row in cur.fetchall()]
-                cur.execute(location_sql, params)
+                location_params = dict(params)
+                location_params["limit"] = min(limit * 5, 50)
+                cur.execute(location_sql, location_params)
                 loc_columns = [d[0] for d in cur.description]
                 loc_rows = [dict(zip(loc_columns, row, strict=True)) for row in cur.fetchall()]
 
         for row in doc_rows:
             row.pop("rank_bucket", None)
-        return {"documents": doc_rows, "locations": loc_rows}
+        deduped_locations = self._reduce_semantic_city_rows(loc_rows)
+        logger.info(
+            "presentation.search_repo_fetch query_length=%s limit=%s document_rows=%s location_rows=%s reduced_location_rows=%s total_ms=%.2f",
+            len(normalized),
+            limit,
+            len(doc_rows),
+            len(loc_rows),
+            len(deduped_locations),
+            (time.perf_counter() - start) * 1000.0,
+        )
+        return {"documents": doc_rows, "locations": deduped_locations[:limit]}

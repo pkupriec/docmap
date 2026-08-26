@@ -69,7 +69,10 @@ msbuild.wrn
 node_modules/
 ui/node_modules/
 ui/dist/
+services/presentation/frontend/dist/
 ui/.vite/
+services/analytics/assets/presentation_geometry/
+*.egg-info/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

@@ -62,3 +62,9 @@ def test_render_pdf_with_fallback_uses_text_renderer_after_primary_failure(monke
     )
 
     assert result == b"%PDF-fallback"
+
+
+def test_thumbnail_failure_does_not_discard_pdf(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service, "render_pdf_thumbnail", lambda _blob: (_ for _ in ()).throw(ValueError("bad pdf")))
+
+    assert service._render_thumbnail_nonfatal(b"%PDF", url="https://example.test/doc") is None

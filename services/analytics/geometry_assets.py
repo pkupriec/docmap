@@ -124,6 +124,23 @@ def _feature_geometry_supported(feature: dict[str, Any]) -> bool:
     return geometry_type in {"Polygon", "MultiPolygon"}
 
 
+def _parse_feature_payload(payload: object) -> dict[str, Any] | None:
+    if isinstance(payload, dict):
+        parsed = payload
+    elif isinstance(payload, (str, bytes, bytearray)):
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+    else:
+        return None
+    if not _feature_geometry_supported(parsed):
+        return None
+    return parsed
+
+
 def _coerce_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -364,6 +381,46 @@ def _pick_unique_feature(features: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
+def _merge_feature_geometries(features: list[dict[str, Any]]) -> dict[str, Any] | None:
+    unique = _dedupe_features(features)
+    if not unique:
+        return None
+    if len(unique) == 1:
+        return unique[0]
+
+    merged_coordinates: list[list[list[list[float]]]] = []
+    template_feature: dict[str, Any] | None = None
+    for feature in unique:
+        geometry = feature.get("geometry")
+        if not isinstance(geometry, dict):
+            return None
+        geometry_type = str(geometry.get("type") or "")
+        coordinates = geometry.get("coordinates")
+        if geometry_type == "Polygon":
+            if not isinstance(coordinates, list):
+                return None
+            merged_coordinates.append(coordinates)
+        elif geometry_type == "MultiPolygon":
+            if not isinstance(coordinates, list):
+                return None
+            merged_coordinates.extend(coordinates)
+        else:
+            return None
+        if template_feature is None:
+            template_feature = feature
+
+    if template_feature is None:
+        return None
+    return {
+        "type": "Feature",
+        "properties": dict(template_feature.get("properties") or {}),
+        "geometry": {
+            "type": "MultiPolygon",
+            "coordinates": merged_coordinates,
+        },
+    }
+
+
 def _candidate_osm_keys(target: GeometryTarget) -> list[tuple[str, int]]:
     keys: list[tuple[str, int]] = []
     seen: set[tuple[str, int]] = set()
@@ -426,6 +483,11 @@ def _fetch_osm_feature(osm_type: str, osm_id: int) -> dict[str, Any] | None:
         },
         "geometry": geometry,
     }
+
+
+def _allow_live_osm_lookup() -> bool:
+    value = str(os.getenv("DOCMAP_ADMIN_BOUNDARIES_ALLOW_LIVE_LOOKUP", "0")).strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def _index_source_features(
@@ -499,6 +561,7 @@ def _select_feature_for_target(
     by_osm: dict[tuple[str, int], dict[str, Any]],
     by_rank_alias: dict[tuple[str, str], list[dict[str, Any]]],
     by_region_pair: dict[tuple[str, str, str], list[dict[str, Any]]],
+    allow_live_lookup: bool = False,
 ) -> tuple[dict[str, Any] | None, str]:
     exact = by_location_id.get(target.location_id)
     if exact is not None:
@@ -530,6 +593,10 @@ def _select_feature_for_target(
     ranked_candidates: list[dict[str, Any]] = []
     for alias in ranked_aliases:
         ranked_candidates.extend(by_rank_alias.get((target.location_rank, alias), []))
+    if target.location_rank == "ocean":
+        merged_ocean_match = _merge_feature_geometries(ranked_candidates)
+        if merged_ocean_match is not None:
+            return merged_ocean_match, "rank_alias_merged"
     ranked_match = _pick_unique_feature(ranked_candidates)
     if ranked_match is not None:
         return ranked_match, "rank_alias"
@@ -542,19 +609,20 @@ def _select_feature_for_target(
         country_match = _pick_unique_feature(country_candidates)
         if country_match is not None:
             return country_match, "country_alias"
-    for candidate_key in candidate_osm_keys:
-        try:
-            osm_feature = _fetch_osm_feature(candidate_key[0], candidate_key[1])
-        except requests.RequestException:
-            logger.warning(
-                "analytics.osm_lookup_failed osm_type=%s osm_id=%s location_id=%s",
-                candidate_key[0],
-                candidate_key[1],
-                target.location_id,
-            )
-            continue
-        if osm_feature is not None:
-            return osm_feature, "osm_live_identity"
+    if allow_live_lookup:
+        for candidate_key in candidate_osm_keys:
+            try:
+                osm_feature = _fetch_osm_feature(candidate_key[0], candidate_key[1])
+            except requests.RequestException:
+                logger.warning(
+                    "analytics.osm_lookup_failed osm_type=%s osm_id=%s location_id=%s",
+                    candidate_key[0],
+                    candidate_key[1],
+                    target.location_id,
+                )
+                continue
+            if osm_feature is not None:
+                return osm_feature, "osm_live_identity"
 
     if not target.canonical_id and not candidate_osm_keys:
         return None, "impossible_missing_upstream_data"
@@ -577,26 +645,80 @@ def _rank_sort_value(rank: str) -> int:
     return RANK_ORDER.get(normalized, 99)
 
 
+def _iter_geometry_positions(geometry: object):
+    if not isinstance(geometry, dict):
+        return
+    geometry_type = geometry.get("type")
+    coordinates = geometry.get("coordinates")
+    if geometry_type == "Polygon" and isinstance(coordinates, list):
+        for ring in coordinates:
+            if not isinstance(ring, list):
+                continue
+            for point in ring:
+                if (
+                    isinstance(point, list)
+                    and len(point) >= 2
+                    and isinstance(point[0], (int, float))
+                    and isinstance(point[1], (int, float))
+                ):
+                    yield float(point[0]), float(point[1])
+    if geometry_type == "MultiPolygon" and isinstance(coordinates, list):
+        for polygon in coordinates:
+            if not isinstance(polygon, list):
+                continue
+            for ring in polygon:
+                if not isinstance(ring, list):
+                    continue
+                for point in ring:
+                    if (
+                        isinstance(point, list)
+                        and len(point) >= 2
+                        and isinstance(point[0], (int, float))
+                        and isinstance(point[1], (int, float))
+                    ):
+                        yield float(point[0]), float(point[1])
+
+
+def _feature_envelope(feature: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    positions = list(_iter_geometry_positions(feature.get("geometry")))
+    if not positions:
+        return None
+    longitudes = [lon for lon, _ in positions]
+    latitudes = [lat for _, lat in positions]
+    return (min(longitudes), min(latitudes), max(longitudes), max(latitudes))
+
+
 def _store_boundaries_in_db(conn: Connection, features: list[dict[str, Any]]) -> None:
     with conn.cursor() as cur:
         cur.execute("TRUNCATE TABLE bi_admin_boundaries")
         if not features:
             return
-        rows: list[tuple[str, str, str]] = []
+        rows: list[tuple[str, str, str, float, float, float, float]] = []
         for feature in features:
             properties = feature.get("properties") or {}
             location_id = _coerce_text(properties.get("location_id"))
             if not location_id:
                 continue
             location_rank = _normalize_rank(_coerce_text(properties.get("location_rank")))
+            envelope = _feature_envelope(feature)
+            if envelope is None:
+                continue
             payload = json.dumps(feature, ensure_ascii=False, separators=(",", ":"))
-            rows.append((location_id, location_rank, payload))
+            rows.append((location_id, location_rank, payload, *envelope))
         if not rows:
             return
         cur.executemany(
             """
-            INSERT INTO bi_admin_boundaries (location_id, location_rank, feature_json)
-            VALUES (%s::uuid, %s, %s::jsonb)
+            INSERT INTO bi_admin_boundaries (
+                location_id,
+                location_rank,
+                feature_json,
+                min_lon,
+                min_lat,
+                max_lon,
+                max_lat
+            )
+            VALUES (%s::uuid, %s, %s::jsonb, %s, %s, %s, %s)
             """,
             rows,
         )
@@ -621,6 +743,7 @@ def build_admin_boundaries_asset(
     raw = json.loads(source.read_text(encoding="utf-8"))
     source_features = list(raw.get("features") or [])
     by_location_id, by_canonical_id, by_osm, by_rank_alias, by_region_pair = _index_source_features(source_features)
+    allow_live_lookup = _allow_live_osm_lookup()
 
     selected_features: list[dict[str, Any]] = []
     unmatched_by_rank: dict[str, list[str]] = {}
@@ -643,6 +766,7 @@ def build_admin_boundaries_asset(
             by_osm=by_osm,
             by_rank_alias=by_rank_alias,
             by_region_pair=by_region_pair,
+            allow_live_lookup=allow_live_lookup,
         )
         if matched_feature is None:
             unmatched_by_rank.setdefault(target.location_rank, []).append(_target_label(target))
@@ -746,3 +870,78 @@ def build_admin_boundaries_asset(
         output_path=output,
         coverage_path=coverage,
     )
+
+
+def backfill_merged_generic_ocean_boundaries(
+    conn: Connection,
+    *,
+    source_path: Path | None = None,
+) -> int:
+    source = source_path or Path(os.getenv("DOCMAP_ADMIN_BOUNDARIES_SOURCE", str(_default_source_path())))
+    if not source.exists():
+        raise FileNotFoundError(f"Admin boundaries source dataset not found: {source}")
+
+    raw = json.loads(source.read_text(encoding="utf-8"))
+    source_features = [
+        feature
+        for feature in list(raw.get("features") or [])
+        if _normalize_rank(_coerce_text((feature.get("properties") or {}).get("location_rank"))) == "ocean"
+        and _feature_geometry_supported(feature)
+    ]
+
+    ocean_sources_by_name: dict[str, list[dict[str, Any]]] = {}
+    for feature in source_features:
+        props = feature.get("properties") or {}
+        location_name = _coerce_text(props.get("location_name")) or ""
+        for alias in _feature_aliases(props, "aliases", fallback=location_name):
+            ocean_sources_by_name.setdefault(alias, []).append(feature)
+
+    updated_rows = 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT location_id::text, feature_json
+            FROM bi_admin_boundaries
+            WHERE location_rank = 'ocean'
+            ORDER BY location_id ASC
+            """
+        )
+        rows = cur.fetchall()
+
+        for location_id, payload in rows:
+            parsed = _parse_feature_payload(payload)
+            if parsed is None:
+                continue
+            properties = parsed.get("properties")
+            if not isinstance(properties, dict):
+                continue
+            location_name = _normalize(_coerce_text(properties.get("location_name")))
+            if not location_name:
+                continue
+            matched_sources = _dedupe_features(ocean_sources_by_name.get(location_name, []))
+            if len(matched_sources) <= 1:
+                continue
+            merged_feature = _merge_feature_geometries(matched_sources)
+            if merged_feature is None:
+                continue
+            parsed["geometry"] = merged_feature["geometry"]
+            properties["match_strategy"] = "rank_alias_merged_backfill"
+            envelope = _feature_envelope(parsed)
+            if envelope is None:
+                continue
+            cur.execute(
+                """
+                UPDATE bi_admin_boundaries
+                SET
+                    feature_json = %s::jsonb,
+                    min_lon = %s,
+                    min_lat = %s,
+                    max_lon = %s,
+                    max_lat = %s
+                WHERE location_id = %s::uuid
+                """,
+                (json.dumps(parsed, ensure_ascii=False, separators=(",", ":")), *envelope, location_id),
+            )
+            updated_rows += 1
+
+    return updated_rows

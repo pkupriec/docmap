@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from services.control import api
@@ -101,20 +103,13 @@ def test_logs_endpoint_returns_ascending_ids(monkeypatch) -> None:
 
 
 def test_sse_events_emit_db_snapshot_updates(monkeypatch) -> None:
-    monkeypatch.setattr(api, "ControlRepository", ApiRepo)
-    monkeypatch.setattr(api, "ControlOrchestrator", DummyOrchestrator)
-    app = create_app()
-    client = TestClient(app)
+    async def collect_initial_events() -> str:
+        stream = api._run_event_stream(ApiRepo(), run_id=1)
+        try:
+            return "\n".join([await anext(stream), await anext(stream)])
+        finally:
+            await stream.aclose()
 
-    with client.stream("GET", "/api/runs/1/events") as response:
-        assert response.status_code == 200
-        collected: list[str] = []
-        for line in response.iter_lines():
-            if line:
-                collected.append(line)
-            if len(collected) > 6:
-                break
-
-    payload = "\n".join(collected)
+    payload = asyncio.run(collect_initial_events())
     assert "event: log" in payload
     assert "hello" in payload

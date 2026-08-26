@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -33,6 +34,7 @@ TABLE_DROP_ORDER = (
     "bi_documents",
     # Operational
     "document_locations",
+    "geo_location_aliases",
     "geo_locations",
     "location_mentions",
     "extraction_runs",
@@ -63,11 +65,127 @@ def _wait_for_db_ready(max_wait_seconds: int = 30, interval_seconds: float = 1.0
         raise last_error
 
 
+def _iter_geometry_positions(geometry: object):
+    if not isinstance(geometry, dict):
+        return
+    geometry_type = geometry.get("type")
+    coordinates = geometry.get("coordinates")
+    if geometry_type == "Polygon" and isinstance(coordinates, list):
+        for ring in coordinates:
+            if not isinstance(ring, list):
+                continue
+            for point in ring:
+                if (
+                    isinstance(point, list)
+                    and len(point) >= 2
+                    and isinstance(point[0], (int, float))
+                    and isinstance(point[1], (int, float))
+                ):
+                    yield float(point[0]), float(point[1])
+    if geometry_type == "MultiPolygon" and isinstance(coordinates, list):
+        for polygon in coordinates:
+            if not isinstance(polygon, list):
+                continue
+            for ring in polygon:
+                if not isinstance(ring, list):
+                    continue
+                for point in ring:
+                    if (
+                        isinstance(point, list)
+                        and len(point) >= 2
+                        and isinstance(point[0], (int, float))
+                        and isinstance(point[1], (int, float))
+                    ):
+                        yield float(point[0]), float(point[1])
+
+
+def _feature_bounds_from_payload(payload: object) -> tuple[float, float, float, float] | None:
+    if isinstance(payload, dict):
+        parsed = payload
+    elif isinstance(payload, (str, bytes, bytearray)):
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+    else:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    positions = list(_iter_geometry_positions(parsed.get("geometry")))
+    if not positions:
+        return None
+    longitudes = [lon for lon, _ in positions]
+    latitudes = [lat for _, lat in positions]
+    return (min(longitudes), min(latitudes), max(longitudes), max(latitudes))
+
+
+def _backfill_boundary_envelopes() -> None:
+    with get_connection() as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT location_id::text, feature_json
+                FROM bi_admin_boundaries
+                WHERE
+                    min_lon IS NULL
+                    OR min_lat IS NULL
+                    OR max_lon IS NULL
+                    OR max_lat IS NULL
+                ORDER BY location_id ASC
+                """
+            )
+            rows = cur.fetchall()
+            updates: list[tuple[float, float, float, float, str]] = []
+            for location_id, payload in rows:
+                bounds = _feature_bounds_from_payload(payload)
+                if bounds is None:
+                    continue
+                updates.append((*bounds, str(location_id)))
+            if updates:
+                cur.executemany(
+                    """
+                    UPDATE bi_admin_boundaries
+                    SET
+                        min_lon = %s,
+                        min_lat = %s,
+                        max_lon = %s,
+                        max_lat = %s
+                    WHERE location_id = %s::uuid
+                    """,
+                    updates,
+                )
+
+
 def _apply_runtime_schema_patches() -> None:
     """Apply lightweight idempotent schema patches needed by runtime code."""
     with get_connection() as conn:
         conn.autocommit = True
         with conn.cursor() as cur:
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS pipeline_commands
+                ADD COLUMN IF NOT EXISTS claim_token UUID
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS pipeline_commands
+                ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS pipeline_commands
+                ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_pipeline_commands_claimable
+                ON pipeline_commands(status, lease_expires_at, id ASC)
+                """
+            )
             cur.execute(
                 """
                 ALTER TABLE IF EXISTS document_snapshots
@@ -218,6 +336,42 @@ def _apply_runtime_schema_patches() -> None:
             )
             cur.execute(
                 """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS identity_key TEXT
+                """
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_geo_locations_identity_key
+                ON geo_locations(identity_key)
+                WHERE identity_key IS NOT NULL
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS geo_location_aliases (
+                    normalized_location TEXT PRIMARY KEY,
+                    location_id UUID NOT NULL REFERENCES geo_locations(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_geo_location_aliases_location_id
+                ON geo_location_aliases(location_id)
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO geo_location_aliases (normalized_location, location_id)
+                SELECT normalized_location, id
+                FROM geo_locations
+                ON CONFLICT (normalized_location) DO NOTHING
+                """
+            )
+            cur.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_geo_locations_osm_identity
                 ON geo_locations(osm_type, osm_id)
                 """
@@ -300,6 +454,12 @@ def _apply_runtime_schema_patches() -> None:
             )
             cur.execute(
                 """
+                ALTER TABLE IF EXISTS document_snapshots
+                ADD COLUMN IF NOT EXISTS pdf_thumbnail_webp BYTEA
+                """
+            )
+            cur.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_bi_location_hierarchy_descendant_depth
                 ON bi_location_hierarchy(descendant_location_id, depth)
                 """
@@ -322,8 +482,36 @@ def _apply_runtime_schema_patches() -> None:
                     location_id UUID PRIMARY KEY REFERENCES geo_locations(id),
                     location_rank TEXT NOT NULL,
                     feature_json JSONB NOT NULL,
+                    min_lon DOUBLE PRECISION,
+                    min_lat DOUBLE PRECISION,
+                    max_lon DOUBLE PRECISION,
+                    max_lat DOUBLE PRECISION,
                     updated_at TIMESTAMP NOT NULL DEFAULT now()
                 )
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_admin_boundaries
+                ADD COLUMN IF NOT EXISTS min_lon DOUBLE PRECISION
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_admin_boundaries
+                ADD COLUMN IF NOT EXISTS min_lat DOUBLE PRECISION
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_admin_boundaries
+                ADD COLUMN IF NOT EXISTS max_lon DOUBLE PRECISION
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS bi_admin_boundaries
+                ADD COLUMN IF NOT EXISTS max_lat DOUBLE PRECISION
                 """
             )
             cur.execute(
@@ -332,6 +520,19 @@ def _apply_runtime_schema_patches() -> None:
                 ON bi_admin_boundaries(location_rank)
                 """
             )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bi_admin_boundaries_lat_bounds
+                ON bi_admin_boundaries(min_lat, max_lat)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bi_admin_boundaries_lon_bounds
+                ON bi_admin_boundaries(min_lon, max_lon)
+                """
+            )
+    _backfill_boundary_envelopes()
 
 
 def run_startup_migrations() -> None:
@@ -345,11 +546,11 @@ def run_startup_migrations() -> None:
         max_wait_seconds=int(os.getenv("DB_STARTUP_MAX_WAIT_SECONDS", "30")),
         interval_seconds=float(os.getenv("DB_STARTUP_RETRY_INTERVAL_SECONDS", "1")),
     )
-    _apply_runtime_schema_patches()
 
     flag = os.getenv("DB_RESET_ON_START", "0").strip().lower()
     should_reset = flag in {"1", "true", "yes", "on"}
     if not should_reset:
+        _apply_runtime_schema_patches()
         logger.info("db.migrations.skip_reset_on_start")
         return
 
@@ -376,9 +577,9 @@ def run_startup_migrations() -> None:
                 schema_exists = cur.fetchone()[0] is not None
                 if schema_exists:
                     logger.info("db.migrations.apply_skip reason=schema_exists mode=apply_only")
-                    logger.warning("db.migrations.reset_done")
-                    return
-            for sql_path in sql_paths:
-                logger.info("db.migrations.apply path=%s", sql_path)
-                cur.execute(_read_sql(sql_path))
+            if should_drop or not schema_exists:
+                for sql_path in sql_paths:
+                    logger.info("db.migrations.apply path=%s", sql_path)
+                    cur.execute(_read_sql(sql_path))
+    _apply_runtime_schema_patches()
     logger.warning("db.migrations.reset_done")

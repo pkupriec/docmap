@@ -1,10 +1,21 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchBoundaries, fetchDocumentLocations, fetchLocationDocuments, fetchLocations, fetchSearch } from "./api";
-import { MapView } from "./MapView";
-import { PdfThumbnail } from "./PdfThumbnail";
+import {
+  fetchBakedManifest,
+  fetchBoundaries,
+  fetchDocumentLocations,
+  fetchLocationDocuments,
+  fetchLocations,
+  fetchSearch,
+} from "./api";
+import { lazy, Suspense } from "react";
+import type { ChangeEvent } from "react";
+import { DocumentPanel } from "./DocumentPanel";
+const MapView = lazy(() => import("./MapView").then((module) => ({ default: module.MapView })));
 import type {
   BoundaryCollection,
+  BoundaryFeature,
+  BakedManifest,
   DocumentCard,
   DocumentLocation,
   Location,
@@ -16,7 +27,8 @@ import type {
 
 type UiStatus = "loading" | "ready" | "error";
 type ErrorContext = "startup" | "location_documents" | "search" | "unknown";
-type BoundariesStatus = "idle" | "loading" | "ready" | "error";
+type BoundariesStatus = "loading" | "ready" | "error";
+type PrecisionMode = "full_precise" | "balanced_precise" | "simplified" | "primitive";
 type ActiveMode =
   | "PDF Modal"
   | "Pinned Document"
@@ -29,6 +41,12 @@ type ActiveMode =
 const EMPTY_SEARCH_RESULTS: SearchResponse = { query: "", documents: [], locations: [] };
 const LINK_DECLUTTER_LIMIT = 12;
 const LOCATION_DOCUMENTS_PAGE_SIZE = 80;
+const PRECISION_MODE_OPTIONS: Array<{ value: PrecisionMode; label: string }> = [
+  { value: "full_precise", label: "Full precise" },
+  { value: "balanced_precise", label: "Balanced precise" },
+  { value: "simplified", label: "Simplified" },
+  { value: "primitive", label: "Primitive" },
+];
 
 function isFiniteCoordinate(latitude: number, longitude: number): boolean {
   return (
@@ -58,50 +76,78 @@ function buildUmbrellaPath(source: ScreenPoint, anchorY: number, target: ScreenP
   return `M ${source.x} ${source.y} L ${source.x} ${anchorY} L ${target.x} ${anchorY} L ${target.x} ${target.y}`;
 }
 
-function formatRank(rank: string | null | undefined): string {
-  const normalized = String(rank ?? "unknown").toLowerCase();
-  if (normalized === "admin_region" || normalized === "region") {
-    return "Admin";
-  }
-  if (normalized === "country") {
-    return "Country";
-  }
-  if (normalized === "continent") {
-    return "Continent";
-  }
-  if (normalized === "ocean") {
-    return "Ocean";
-  }
-  if (normalized === "city") {
-    return "City";
-  }
-  return "Unknown";
+function toPmtilesUrl(archiveUrl: string | null | undefined): string | null {
+  if (!archiveUrl) return null;
+  const absoluteUrl = new URL(archiveUrl, window.location.origin).toString();
+  return `pmtiles://${absoluteUrl}`;
 }
 
-function errorMessageFor(context: ErrorContext): string {
-  if (context === "startup") {
-    return "Unable to load locations.";
-  }
-  if (context === "location_documents") {
-    return "Unable to load linked documents for this location.";
-  }
-  if (context === "search") {
-    return "Unable to load search results.";
-  }
-  return "Unable to load data.";
-}
-
-const EMPTY_BOUNDARIES: BoundaryCollection = {
-  type: "FeatureCollection",
-  features: [],
+type BoundaryFeatureMap = Record<string, BoundaryFeature>;
+const BOUNDARY_RENDER_RANK_PRIORITY: Record<string, number> = {
+  ocean: 0,
+  continent: 1,
+  country: 2,
+  admin_region: 3,
+  region: 3,
+  city: 4,
+  national_park: 5,
+  desert: 5,
+  unknown: 90,
 };
 
+function getBoundaryFeatureKey(feature: BoundaryFeature, fallbackIndex: number): string {
+  const locationId = String(feature.properties.location_id ?? "").trim();
+  if (locationId) {
+    return locationId;
+  }
+  return `feature:${fallbackIndex}:${feature.properties.location_rank ?? "unknown"}:${feature.properties.location_name ?? "unknown"}`;
+}
+
+function buildBoundaryFeatureMap(collection: BoundaryCollection): BoundaryFeatureMap {
+  const next: BoundaryFeatureMap = {};
+  collection.features.forEach((feature, index) => {
+    next[getBoundaryFeatureKey(feature, index)] = feature;
+  });
+  return next;
+}
+
+function sortBoundaryFeatures(features: BoundaryFeature[]): BoundaryFeature[] {
+  return [...features].sort((left, right) => {
+    const rankA = String(left.properties.location_rank ?? "unknown");
+    const rankB = String(right.properties.location_rank ?? "unknown");
+    const priorityA = BOUNDARY_RENDER_RANK_PRIORITY[rankA] ?? 99;
+    const priorityB = BOUNDARY_RENDER_RANK_PRIORITY[rankB] ?? 99;
+    if (priorityA !== priorityB) {
+      return priorityA - priorityB;
+    }
+    const idA = String(left.properties.location_id ?? "");
+    const idB = String(right.properties.location_id ?? "");
+    if (idA !== idB) {
+      return idA.localeCompare(idB);
+    }
+    return String(left.properties.location_name ?? "").localeCompare(String(right.properties.location_name ?? ""));
+  });
+}
+
 export default function App() {
+  const runtimeWindow = globalThis as typeof globalThis & {
+    __DOCMAP_TEST_HOOKS__?: {
+      setViewport?: (viewport: MapViewport) => void;
+      setPinnedLocationId?: (locationId: string | null) => void;
+      setHighlightedLocationIds?: (locationIds: string[]) => void;
+      clearHighlightedLocationIds?: () => void;
+      setPrecisionMode?: (mode: PrecisionMode) => void;
+      getBoundaryDebug?: () => Record<string, unknown>;
+    };
+    __DOCMAP_BOUNDARY_DEBUG__?: Record<string, unknown>;
+  };
   const [status, setStatus] = useState<UiStatus>("loading");
   const [errorContext, setErrorContext] = useState<ErrorContext>("unknown");
   const [locations, setLocations] = useState<Location[]>([]);
-  const [boundaries, setBoundaries] = useState<BoundaryCollection>(EMPTY_BOUNDARIES);
-  const [boundariesStatus, setBoundariesStatus] = useState<BoundariesStatus>("idle");
+  const [bakedManifest, setBakedManifest] = useState<BakedManifest | null>(null);
+  const [sessionPrecisionMode, setSessionPrecisionMode] = useState<PrecisionMode | null>(null);
+  const [explicitBoundaryFeatures, setExplicitBoundaryFeatures] = useState<BoundaryFeatureMap>({});
+  const [boundariesStatus, setBoundariesStatus] = useState<BoundariesStatus>("loading");
   const [locationDocuments, setLocationDocuments] = useState<DocumentCard[]>([]);
   const [locationDocumentsMeta, setLocationDocumentsMeta] = useState<LocationDocumentsResponse | null>(null);
   const [isLoadingMoreDocuments, setIsLoadingMoreDocuments] = useState(false);
@@ -120,80 +166,56 @@ export default function App() {
     Array<{ latitude: number; longitude: number }>
   >([]);
   const [declutterLinks, setDeclutterLinks] = useState(true);
+  const [testHighlightedLocationIds, setTestHighlightedLocationIds] = useState<string[] | null>(null);
 
   const linksByDocumentIdRef = useRef<Record<string, DocumentLocation[]>>({});
-  const pendingDocumentLocationsRef = useRef<Record<string, Promise<DocumentLocation[]>>>({});
   const locationDocumentsByLocationIdRef = useRef<Record<string, LocationDocumentsResponse>>({});
-  const pendingLocationDocumentsRef = useRef<Record<string, Promise<LocationDocumentsResponse>>>({});
   const mapViewportRef = useRef<MapViewport | null>(null);
   const activeVisualizationDocumentIdRef = useRef<string | null>(null);
   const viewportRafRef = useRef<number | null>(null);
   const cardRefs = useRef<Record<string, HTMLElement | null>>({});
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const pdfModalRef = useRef<HTMLDivElement | null>(null);
   const startupTimestampRef = useRef<number>(performance.now());
   const firstMeaningfulRenderLoggedRef = useRef(false);
   const boundariesReadyLoggedRef = useRef(false);
+  const explicitBoundaryRequestVersionRef = useRef(0);
+  const explicitBoundaryCacheRef = useRef<Record<string, BoundaryFeatureMap>>({});
+  const loadMoreRequestVersionRef = useRef(0);
 
   const selectedLocationId = pinnedLocationId ?? hoveredLocationId;
+  const boundaryExplicitLocationId = pinnedLocationId;
   const searchActive = searchQuery.trim().length >= 3;
   const activeVisualizationDocumentId = pinnedDocumentId ?? hoveredDocumentId;
 
   const fetchLocationDocumentsCached = useCallback(
-    async (locationId: string): Promise<LocationDocumentsResponse> => {
+    async (locationId: string, signal?: AbortSignal): Promise<LocationDocumentsResponse> => {
       const cached = locationDocumentsByLocationIdRef.current[locationId];
       if (cached) {
         return cached;
       }
 
-      const pending = pendingLocationDocumentsRef.current[locationId];
-      if (pending) {
-        return pending;
-      }
-
-      const request = fetchLocationDocuments(locationId, {
+      const payload = await fetchLocationDocuments(locationId, {
         limit: LOCATION_DOCUMENTS_PAGE_SIZE,
         offset: 0,
-      })
-        .then((payload) => {
-          locationDocumentsByLocationIdRef.current[locationId] = payload;
-          return payload;
-        })
-        .finally(() => {
-          delete pendingLocationDocumentsRef.current[locationId];
-        });
-
-      pendingLocationDocumentsRef.current[locationId] = request;
-      return request;
+      }, signal);
+      locationDocumentsByLocationIdRef.current[locationId] = payload;
+      return payload;
     },
     [],
   );
 
   const fetchDocumentLocationsCached = useCallback(
-    async (documentId: string): Promise<DocumentLocation[]> => {
+    async (documentId: string, signal?: AbortSignal): Promise<DocumentLocation[]> => {
       const cached = linksByDocumentIdRef.current[documentId];
       if (cached) {
         return cached;
       }
 
-      const pending = pendingDocumentLocationsRef.current[documentId];
-      if (pending) {
-        return pending;
-      }
-
-      const request = fetchDocumentLocations(documentId)
-        .then((items) => {
-          const validItems = items.filter((item) =>
-            isFiniteCoordinate(item.latitude, item.longitude),
-          );
-          linksByDocumentIdRef.current[documentId] = validItems;
-          return validItems;
-        })
-        .finally(() => {
-          delete pendingDocumentLocationsRef.current[documentId];
-        });
-
-      pendingDocumentLocationsRef.current[documentId] = request;
-      return request;
+      const items = await fetchDocumentLocations(documentId, signal);
+      const validItems = items.filter((item) => isFiniteCoordinate(item.latitude, item.longitude));
+      linksByDocumentIdRef.current[documentId] = validItems;
+      return validItems;
     },
     [],
   );
@@ -217,13 +239,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     startupTimestampRef.current = performance.now();
+    boundariesReadyLoggedRef.current = false;
     setBoundariesStatus("loading");
 
-    fetchLocations()
+    fetchLocations(controller.signal)
       .then((items) => {
-        if (cancelled) {
+        if (controller.signal.aborted) {
           return;
         }
         setLocations(items.filter((item) => isFiniteCoordinate(item.latitude, item.longitude)));
@@ -236,66 +259,80 @@ export default function App() {
         }
       })
       .catch(() => {
-        if (cancelled) {
+        if (controller.signal.aborted) {
           return;
         }
         setErrorContext("startup");
         setStatus("error");
       });
 
-    fetchBoundaries({
-      lite: true,
-      rank_filter: "default",
-    })
-      .then((nextBoundaries) => {
-        if (cancelled) {
-          return;
-        }
-        setBoundaries(nextBoundaries);
-        setBoundariesStatus("ready");
-        if (!boundariesReadyLoggedRef.current) {
-          boundariesReadyLoggedRef.current = true;
-          const elapsedMs = performance.now() - startupTimestampRef.current;
-          console.info("presentation.performance.boundaries_ready_ms", elapsedMs.toFixed(2));
-        }
+    fetchBakedManifest(undefined, controller.signal)
+      .then((manifest) => {
+        if (controller.signal.aborted) return;
+        setBakedManifest(manifest);
+        if (manifest.mode) setSessionPrecisionMode(manifest.mode as PrecisionMode);
       })
       .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        setBoundariesStatus("error");
-        console.warn("presentation.boundaries_unavailable");
+        if (!controller.signal.aborted) setBoundariesStatus("error");
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, []);
 
   useEffect(() => {
+    if (!sessionPrecisionMode || bakedManifest?.mode === sessionPrecisionMode) {
+      return;
+    }
+    const controller = new AbortController();
+    boundariesReadyLoggedRef.current = false;
+    setBoundariesStatus("loading");
+    fetchBakedManifest(sessionPrecisionMode, controller.signal)
+      .then((manifest) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setBakedManifest(manifest);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setBoundariesStatus("error");
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [bakedManifest?.mode, sessionPrecisionMode]);
+
+  useEffect(() => {
+    loadMoreRequestVersionRef.current += 1;
+    setIsLoadingMoreDocuments(false);
     if (!selectedLocationId || searchActive) {
       setLocationDocuments([]);
       setLocationDocumentsMeta(null);
       return;
     }
-    let cancelled = false;
-    fetchLocationDocumentsCached(selectedLocationId)
+    const controller = new AbortController();
+    fetchLocationDocumentsCached(selectedLocationId, controller.signal)
       .then((payload: LocationDocumentsResponse) => {
-        if (cancelled) {
+        if (controller.signal.aborted) {
           return;
         }
         setLocationDocuments(payload.items);
         setLocationDocumentsMeta(payload);
+        setStatus("ready");
       })
       .catch(() => {
-        if (cancelled) {
+        if (controller.signal.aborted) {
           return;
         }
         setErrorContext("location_documents");
         setStatus("error");
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [fetchLocationDocumentsCached, searchActive, selectedLocationId]);
 
@@ -314,22 +351,26 @@ export default function App() {
       return;
     }
     setIsLoadingMoreDocuments(true);
+    const requestVersion = loadMoreRequestVersionRef.current + 1;
+    loadMoreRequestVersionRef.current = requestVersion;
     fetchLocationDocuments(selectedLocationId, {
       limit: LOCATION_DOCUMENTS_PAGE_SIZE,
       offset: locationDocuments.length,
     })
       .then((payload) => {
+        if (loadMoreRequestVersionRef.current !== requestVersion) return;
         setLocationDocuments((current) =>
           Array.from(new Map([...current, ...payload.items].map((item) => [item.document_id, item])).values()),
         );
         setLocationDocumentsMeta(payload);
       })
       .catch(() => {
+        if (loadMoreRequestVersionRef.current !== requestVersion) return;
         setErrorContext("location_documents");
         setStatus("error");
       })
       .finally(() => {
-        setIsLoadingMoreDocuments(false);
+        if (loadMoreRequestVersionRef.current === requestVersion) setIsLoadingMoreDocuments(false);
       });
   }, [
     isLoadingMoreDocuments,
@@ -345,17 +386,24 @@ export default function App() {
       setSearchDocumentCoordinates([]);
       return;
     }
+    const controller = new AbortController();
     const handle = window.setTimeout(() => {
-      fetchSearch(searchQuery.trim(), 5)
+      fetchSearch(searchQuery.trim(), 5, controller.signal)
         .then((payload) => {
+          if (controller.signal.aborted) return;
           setSearchResults(payload);
+          setStatus("ready");
         })
         .catch(() => {
+          if (controller.signal.aborted) return;
           setErrorContext("search");
           setStatus("error");
         });
     }, 180);
-    return () => window.clearTimeout(handle);
+    return () => {
+      window.clearTimeout(handle);
+      controller.abort();
+    };
   }, [searchActive, searchQuery]);
 
   const displayedDocuments = searchActive ? searchResults.documents : locationDocuments;
@@ -377,14 +425,14 @@ export default function App() {
       return;
     }
 
-    let cancelled = false;
+    const controller = new AbortController();
     const uniqueDocumentIds = Array.from(
       new Set(searchResults.documents.map((item) => item.document_id)),
     );
 
-    Promise.all(uniqueDocumentIds.map((documentId) => fetchDocumentLocationsCached(documentId)))
+    Promise.all(uniqueDocumentIds.map((documentId) => fetchDocumentLocationsCached(documentId, controller.signal)))
       .then((allLinks) => {
-        if (cancelled) {
+        if (controller.signal.aborted) {
           return;
         }
         const byKey = new Map<string, { latitude: number; longitude: number }>();
@@ -402,14 +450,14 @@ export default function App() {
         setSearchDocumentCoordinates(Array.from(byKey.values()));
       })
       .catch(() => {
-        if (cancelled) {
+        if (controller.signal.aborted) {
           return;
         }
         setSearchDocumentCoordinates([]);
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [
     fetchDocumentLocationsCached,
@@ -428,16 +476,16 @@ export default function App() {
 
     updateVisibleLinksForActiveDocument(activeVisualizationDocumentId);
 
-    let cancelled = false;
-    fetchDocumentLocationsCached(activeVisualizationDocumentId)
+    const controller = new AbortController();
+    fetchDocumentLocationsCached(activeVisualizationDocumentId, controller.signal)
       .then(() => {
-        if (cancelled || activeVisualizationDocumentIdRef.current !== activeVisualizationDocumentId) {
+        if (controller.signal.aborted || activeVisualizationDocumentIdRef.current !== activeVisualizationDocumentId) {
           return;
         }
         updateVisibleLinksForActiveDocument(activeVisualizationDocumentId);
       })
       .catch(() => {
-        if (cancelled || activeVisualizationDocumentIdRef.current !== activeVisualizationDocumentId) {
+        if (controller.signal.aborted || activeVisualizationDocumentIdRef.current !== activeVisualizationDocumentId) {
           return;
         }
         setVisibleDocumentLinks([]);
@@ -445,7 +493,7 @@ export default function App() {
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [
     activeVisualizationDocumentId,
@@ -475,6 +523,27 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pdfModalDocumentId]);
+
+  useEffect(() => {
+    if (!pdfModalDocumentId) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const modal = pdfModalRef.current;
+      if (!modal) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Node) || modal.contains(target)) {
+        return;
+      }
+      setPdfModalDocumentId(null);
+    };
+
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
   }, [pdfModalDocumentId]);
 
   const searchFocusCoordinates = useMemo(() => {
@@ -525,7 +594,7 @@ export default function App() {
     [],
   );
 
-  const onViewportChange = useCallback(
+  const applyViewportChange = useCallback(
     (viewport: MapViewport) => {
       mapViewportRef.current = viewport;
       if (!activeVisualizationDocumentIdRef.current) {
@@ -542,20 +611,149 @@ export default function App() {
     [updateVisibleLinksForActiveDocument],
   );
 
+  const onViewportChange = useCallback(
+    (viewport: MapViewport) => {
+      applyViewportChange(viewport);
+    },
+    [applyViewportChange],
+  );
+  const onBakedStatusChange = useCallback(
+    (nextStatus: "loading" | "ready" | "error") => {
+      setBoundariesStatus(nextStatus);
+      if (nextStatus === "ready" && !boundariesReadyLoggedRef.current) {
+        boundariesReadyLoggedRef.current = true;
+        const elapsedMs = performance.now() - startupTimestampRef.current;
+        console.info("presentation.performance.boundaries_ready_ms", elapsedMs.toFixed(2));
+      }
+    },
+    [],
+  );
+  const onPrecisionModeChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const nextMode = event.target.value as PrecisionMode;
+      setSessionPrecisionMode(nextMode);
+    },
+    [],
+  );
+
   const selectedLocation = useMemo(
     () => locations.find((item) => item.location_id === selectedLocationId) ?? null,
     [locations, selectedLocationId],
   );
 
-  const activeVisualizationDocument = useMemo(
-    () => uniqueDisplayedDocuments.find((doc) => doc.document_id === activeVisualizationDocumentId) ?? null,
-    [activeVisualizationDocumentId, uniqueDisplayedDocuments],
+  const highlightedLocationIds = useMemo(() => {
+    if (testHighlightedLocationIds !== null) {
+      return testHighlightedLocationIds;
+    }
+    return searchActive ? searchResults.locations.map((location) => location.location_id) : [];
+  }, [searchActive, searchResults.locations, testHighlightedLocationIds]);
+
+  const sortedHighlightedLocationIds = useMemo(
+    () => Array.from(new Set(highlightedLocationIds)).sort(),
+    [highlightedLocationIds],
   );
 
-  const highlightedLocationIds = useMemo(
-    () => (searchActive ? searchResults.locations.map((location) => location.location_id) : []),
-    [searchActive, searchResults.locations],
+  const explicitBoundaryLocationIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (boundaryExplicitLocationId) {
+      ids.add(boundaryExplicitLocationId);
+    }
+    sortedHighlightedLocationIds.forEach((locationId) => ids.add(locationId));
+    return Array.from(ids).sort();
+  }, [boundaryExplicitLocationId, sortedHighlightedLocationIds]);
+
+  const boundaries = useMemo<BoundaryCollection>(
+    () => ({
+      type: "FeatureCollection",
+      features: sortBoundaryFeatures(Object.values(explicitBoundaryFeatures)),
+    }),
+    [explicitBoundaryFeatures],
   );
+
+  useEffect(() => {
+    if (explicitBoundaryLocationIds.length === 0) {
+      setExplicitBoundaryFeatures({});
+      return;
+    }
+
+    const requestKey = explicitBoundaryLocationIds.join(",");
+    const cached = explicitBoundaryCacheRef.current[requestKey];
+    if (cached) {
+      setExplicitBoundaryFeatures(cached);
+      return;
+    }
+
+    const requestVersion = explicitBoundaryRequestVersionRef.current + 1;
+    explicitBoundaryRequestVersionRef.current = requestVersion;
+    const controller = new AbortController();
+
+    fetchBoundaries({
+      selected_location_id: boundaryExplicitLocationId,
+      highlighted_location_ids: sortedHighlightedLocationIds,
+    }, controller.signal)
+      .then((nextBoundaries) => {
+        if (explicitBoundaryRequestVersionRef.current !== requestVersion) {
+          return;
+        }
+        const nextFeatures = buildBoundaryFeatureMap(nextBoundaries);
+        explicitBoundaryCacheRef.current[requestKey] = nextFeatures;
+        setExplicitBoundaryFeatures(nextFeatures);
+      })
+      .catch(() => {
+        if (controller.signal.aborted || explicitBoundaryRequestVersionRef.current !== requestVersion) {
+          return;
+        }
+        console.warn("presentation.explicit_boundaries_unavailable");
+      });
+    return () => controller.abort();
+  }, [boundaryExplicitLocationId, explicitBoundaryLocationIds, sortedHighlightedLocationIds]);
+
+  useEffect(() => {
+    runtimeWindow.__DOCMAP_BOUNDARY_DEBUG__ = {
+      boundariesStatus,
+      sessionPrecisionMode,
+      defaultPrecisionMode: bakedManifest?.default_mode ?? null,
+      bakedVersion: bakedManifest?.version ?? null,
+      bakedArchiveUrl: bakedManifest?.archive_url ?? null,
+      explicitBoundaryLocationIds,
+      renderedBoundaryFeatureCount: boundaries.features.length,
+    };
+  }, [
+    boundaries.features.length,
+    boundariesStatus,
+    bakedManifest?.default_mode,
+    bakedManifest?.archive_url,
+    bakedManifest?.version,
+    explicitBoundaryLocationIds,
+    runtimeWindow,
+    sessionPrecisionMode,
+  ]);
+
+  useEffect(() => {
+    runtimeWindow.__DOCMAP_TEST_HOOKS__ = {
+      setViewport: (viewport) => {
+        applyViewportChange(viewport);
+      },
+      setPinnedLocationId: (locationId) => {
+        setPinnedLocationId(locationId);
+        setHoveredLocationId(locationId);
+      },
+      setHighlightedLocationIds: (locationIds) => {
+        setTestHighlightedLocationIds(Array.from(new Set(locationIds)).sort());
+      },
+      clearHighlightedLocationIds: () => {
+        setTestHighlightedLocationIds([]);
+      },
+      setPrecisionMode: (mode) => {
+        setSessionPrecisionMode(mode);
+      },
+      getBoundaryDebug: () => runtimeWindow.__DOCMAP_BOUNDARY_DEBUG__ ?? {},
+    };
+    return () => {
+      delete runtimeWindow.__DOCMAP_TEST_HOOKS__;
+      delete runtimeWindow.__DOCMAP_BOUNDARY_DEBUG__;
+    };
+  }, [applyViewportChange, runtimeWindow]);
 
   const visibleLinksToRender = useMemo(() => {
     if (!declutterLinks) {
@@ -650,6 +848,27 @@ export default function App() {
               <h1>DocMap</h1>
               <p className="caption">Presentation Layer</p>
               <p>Locations: {locations.length}</p>
+              <label className="precision-control" htmlFor="precision-mode-select">
+                Precision
+                <select
+                  id="precision-mode-select"
+                  value={sessionPrecisionMode ?? bakedManifest?.mode ?? "balanced_precise"}
+                  onChange={onPrecisionModeChange}
+                >
+                  {PRECISION_MODE_OPTIONS.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      disabled={Boolean(
+                        bakedManifest?.available_modes.length &&
+                          !bakedManifest.available_modes.includes(option.value),
+                      )}
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button type="button" onClick={onClear}>
                 Clear
               </button>
@@ -662,14 +881,24 @@ export default function App() {
               <button type="button" title="Clear selections" onClick={onClear}>
                 C
               </button>
+              <button
+                type="button"
+                title={`Precision: ${sessionPrecisionMode ?? bakedManifest?.mode ?? "balanced_precise"}`}
+              >
+                P
+              </button>
             </div>
           )}
         </aside>
 
         <main className="map-panel">
+          <Suspense fallback={<div className="map-loading">Loading map…</div>}>
           <MapView
             locations={locations}
-            boundaries={boundaries}
+            explicitBoundaries={boundaries}
+            bakedArchiveUrl={toPmtilesUrl(bakedManifest?.archive_url)}
+            bakedZoomMin={bakedManifest?.min_zoom ?? 0}
+            bakedZoomMax={bakedManifest?.max_zoom ?? 8}
             selectedLocationId={selectedLocationId}
             highlightedLocationIds={highlightedLocationIds}
             onHoverLocation={onHoverLocation}
@@ -677,8 +906,10 @@ export default function App() {
             onEmptyMapClick={onEmptyMapClick}
             onViewportChange={onViewportChange}
             onProjectorChange={onProjectorChange}
+            onBakedStatusChange={onBakedStatusChange}
             focusCoordinates={searchFocusCoordinates}
           />
+          </Suspense>
 
           <div className="map-legend" aria-label="Map legend">
             <h3>Legend</h3>
@@ -688,155 +919,53 @@ export default function App() {
           </div>
         </main>
 
-        <aside className="right-panel">
-          <div className="search-row">
-            <input
-              ref={searchInputRef}
-              type="search"
-              value={searchQuery}
-              placeholder="Search SCP or location"
-              onChange={(event) => setSearchQuery(event.target.value)}
-            />
-          </div>
-
-          <div className="mode-summary-row">
-            <span className="mode-pill">Mode: {activeMode}</span>
-            {selectedLocation ? (
-              <span className="selection-pill" title={selectedLocation.name}>
-                {selectedLocation.name} · {selectedLocation.document_count} docs
-              </span>
-            ) : null}
-          </div>
-
-          {searchActive && status === "ready" ? (
-            <p className="search-summary">
-              Results: {searchResults.locations.length} locations, {searchResults.documents.length} documents
-            </p>
-          ) : null}
-
-          <h2>{panelTitle}</h2>
-          {locationDocumentsMeta && !searchActive ? (
-            <p className="fallback-note">
-              Scope: {formatRank(locationDocumentsMeta.scope_rank)} · {locationDocumentsMeta.total_items} docs from{" "}
-              {locationDocumentsMeta.scope_location_count} locations
-              {locationDocumentsMeta.fallback_depth && locationDocumentsMeta.fallback_depth > 0
-                ? ` · alias depth ${locationDocumentsMeta.fallback_depth}`
-                : ""}
-            </p>
-          ) : null}
-          {status === "loading" && <p>Loading locations...</p>}
-          {status === "error" && <p>{errorMessageFor(errorContext)}</p>}
-          {status === "ready" && boundariesStatus === "loading" ? (
-            <p className="fallback-note">Loading boundaries in background...</p>
-          ) : null}
-          {status === "ready" && boundariesStatus === "error" ? (
-            <p className="fallback-note">Boundaries unavailable. Showing location points only.</p>
-          ) : null}
-
-          {status === "ready" && searchActive ? (
-            <div className="search-result-locations">
-              {searchResults.locations.map((location) => (
-                <button
-                  key={location.location_id}
-                  type="button"
-                  className="search-location-chip"
-                  onClick={() => onClickLocation(location.location_id)}
-                >
-                  <span className="chip-rank">{formatRank(location.location_rank)}</span>
-                  <span>{location.name}</span>
-                </button>
-              ))}
-            </div>
-          ) : null}
-
-          {status === "ready" && !searchActive && !selectedLocation && <p>Explore the map to discover SCP documents.</p>}
-          {status === "ready" && uniqueDisplayedDocuments.length === 0 && (searchActive || selectedLocation) ? <p>No linked documents.</p> : null}
-
-          {activeVisualizationDocumentId ? (
-            <div className="link-controls">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={declutterLinks}
-                  onChange={(event) => setDeclutterLinks(event.target.checked)}
-                />
-                Declutter links (top {LINK_DECLUTTER_LIMIT})
-              </label>
-              {hiddenVisibleLinkCount > 0 ? <span>Hidden visible links: {hiddenVisibleLinkCount}</span> : null}
-            </div>
-          ) : null}
-
-          <div className="cards">
-            {uniqueDisplayedDocuments.map((doc) => (
-              <article
-                key={doc.document_id}
-                className={`doc-card ${pinnedDocumentId === doc.document_id ? "doc-card-pinned" : ""}`}
-                ref={(element) => {
-                  cardRefs.current[doc.document_id] = element;
-                }}
-                onMouseEnter={() => setHoveredDocumentId(doc.document_id)}
-                onMouseLeave={() => setHoveredDocumentId((current) => (current === doc.document_id ? null : current))}
-                onClick={() => {
-                  setPinnedDocumentId((current) => {
-                    if (current === doc.document_id) {
-                      return null;
-                    }
-                    return doc.document_id;
-                  });
-                  setHoveredDocumentId(doc.document_id);
-                  setPdfModalDocumentId((current) => (current && current !== doc.document_id ? null : current));
-                }}
-              >
-                <header>
-                  <a href={doc.scp_url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
-                    {doc.scp_number}
-                  </a>
-                </header>
-                <p className="card-location">{doc.location_display ?? "Unknown location"}</p>
-                <div className="card-meta-row">
-                  <span className="card-meta-pill">PDF: {doc.pdf_url ? "Available" : "Missing"}</span>
-                  {activeVisualizationDocument?.document_id === doc.document_id ? (
-                    <span className="card-meta-pill emphasis">Active visualization</span>
-                  ) : null}
-                </div>
-
-                <PdfThumbnail
-                  pdfUrl={doc.pdf_url}
-                  alt={`Preview for ${doc.scp_number}`}
-                  onClick={() => {
-                    setPinnedDocumentId(doc.document_id);
-                    setPdfModalDocumentId(doc.document_id);
-                  }}
-                />
-
-                {activeVisualizationDocumentId === doc.document_id ? (
-                  <p className="offscreen-count badge">Offscreen linked locations: {offscreenLinkCount}</p>
-                ) : null}
-              </article>
-            ))}
-          </div>
-          {canLoadMoreLocationDocuments ? (
-            <div className="load-more-row">
-              <button type="button" onClick={onLoadMoreLocationDocuments} disabled={isLoadingMoreDocuments}>
-                {isLoadingMoreDocuments ? "Loading..." : "Load more"}
-              </button>
-            </div>
-          ) : null}
-        </aside>
+        <DocumentPanel
+          searchInputRef={searchInputRef}
+          searchQuery={searchQuery}
+          onSearchQueryChange={setSearchQuery}
+          activeMode={activeMode}
+          selectedLocation={selectedLocation}
+          searchActive={searchActive}
+          searchResults={searchResults}
+          panelTitle={panelTitle}
+          locationDocumentsMeta={locationDocumentsMeta}
+          status={status}
+          errorContext={errorContext}
+          boundariesStatus={boundariesStatus}
+          documents={uniqueDisplayedDocuments}
+          activeVisualizationDocumentId={activeVisualizationDocumentId}
+          pinnedDocumentId={pinnedDocumentId}
+          offscreenLinkCount={offscreenLinkCount}
+          declutterLinks={declutterLinks}
+          hiddenVisibleLinkCount={hiddenVisibleLinkCount}
+          cardRefs={cardRefs}
+          canLoadMore={canLoadMoreLocationDocuments}
+          isLoadingMore={isLoadingMoreDocuments}
+          onClickLocation={onClickLocation}
+          onDeclutterChange={setDeclutterLinks}
+          onHoverDocument={setHoveredDocumentId}
+          onToggleDocument={(documentId) => {
+            setPinnedDocumentId((current) => current === documentId ? null : documentId);
+            setHoveredDocumentId(documentId);
+            setPdfModalDocumentId((current) => current && current !== documentId ? null : current);
+          }}
+          onOpenPdf={(documentId) => {
+            setPinnedDocumentId(documentId);
+            setPdfModalDocumentId(documentId);
+          }}
+          onLoadMore={onLoadMoreLocationDocuments}
+        />
       </div>
 
       {pdfModalDocumentId ? (
         <div
           className="pdf-modal-backdrop"
-          role="button"
-          tabIndex={-1}
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              setPdfModalDocumentId(null);
-            }
+          style={{
+            left: isLeftPanelCollapsed ? 50 : 240,
+            right: 390,
           }}
         >
-          <div className="pdf-modal" role="dialog" aria-modal="true">
+          <div ref={pdfModalRef} className="pdf-modal" role="dialog" aria-modal="true">
             <button type="button" className="pdf-close" onClick={() => setPdfModalDocumentId(null)}>
               Close
             </button>

@@ -13,6 +13,7 @@ from services.geocoder.repository import (
     GeoLocationCacheEntry,
     PendingMention,
     clear_document_links_for_all_mentions,
+    consolidate_location_identities,
     get_all_mentions,
     get_geo_location_cache_entry,
     get_pending_mentions,
@@ -144,13 +145,16 @@ def process_pending_mentions(
     logger.info("geocoder.batch_start mode=pending limit=%s offset=%s", limit, offset)
     with get_connection() as conn:
         pending = get_pending_mentions(conn, limit=limit, offset=offset)
-    return _process_mentions(
+    result = _process_mentions(
         mentions=pending,
         on_mention=on_mention,
         should_stop=should_stop,
         refresh_missing_identity=False,
         force_full_refresh=False,
     )
+    if offset == 0:
+        _consolidate_location_identities()
+    return result
 
 
 def process_all_mentions(
@@ -180,13 +184,23 @@ def process_all_mentions(
             conn.commit()
             logger.info("geocoder.batch_reset_links_cleared=%s", cleared)
         mentions = get_all_mentions(conn, limit=limit, offset=offset)
-    return _process_mentions(
+    result = _process_mentions(
         mentions=mentions,
         on_mention=on_mention,
         should_stop=should_stop,
         refresh_missing_identity=refresh_missing_identity,
         force_full_refresh=force_full_refresh,
     )
+    if offset == 0:
+        _consolidate_location_identities()
+    return result
+
+
+def _consolidate_location_identities() -> None:
+    with get_connection() as conn:
+        result = consolidate_location_identities(conn)
+        conn.commit()
+    logger.info("geocoder.location_identities_consolidated %s", result)
 
 
 def _process_mentions(

@@ -119,14 +119,25 @@ def save_snapshot_if_changed(
 
 
 def set_snapshot_pdf_blob(conn: Connection, snapshot_id: str, pdf_blob: bytes) -> None:
+    set_snapshot_pdf_assets(conn, snapshot_id, pdf_blob=pdf_blob, pdf_thumbnail_webp=None)
+
+
+def set_snapshot_pdf_assets(
+    conn: Connection,
+    snapshot_id: str,
+    *,
+    pdf_blob: bytes,
+    pdf_thumbnail_webp: bytes | None,
+) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
             UPDATE document_snapshots
-            SET pdf_blob = %s
+            SET pdf_blob = %s,
+                pdf_thumbnail_webp = %s
             WHERE id = %s
             """,
-            (pdf_blob, snapshot_id),
+            (pdf_blob, pdf_thumbnail_webp, snapshot_id),
         )
 
 

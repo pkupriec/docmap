@@ -1,39 +1,14 @@
-﻿# Project Constitution
+# Project constitution
 
-DocMap maps SCP documents to real-world locations mentioned in document text.
+These invariants require explicit user approval to change:
 
-Non-negotiable invariants:
-- pipeline order is `crawl -> extract -> geocode -> analytics -> export`
-- snapshots are historical records; changed content creates a new snapshot
-- service/table ownership boundaries stay explicit
-- presentation is a separate read-only runtime over BI/runtime projections
-- control API enqueues commands; orchestrator applies run/stage mutations
-- architecture changes must be explicit and documented
+- Stage order is `crawl -> extract -> geocode -> analytics -> export`.
+- The control API and scheduler enqueue commands; only the orchestrator executes stages.
+- Raw document snapshots are append-only inputs. Derived geo, analytics, and presentation artifacts are rebuildable.
+- Table ownership is strict: crawler owns documents/snapshots, extractor owns extraction rows, geocoder owns geo entities/aliases/links, analytics owns `bi_*`, control owns `pipeline_*`.
+- Presentation is a separate read-only app and API.
+- Docker Compose remains the supported hosting topology.
+- Pipeline work commits per item or bounded batch; a single failure must not poison later items.
+- Reruns, retries, resumes, and reclaimed leases must be idempotent.
 
-Write boundaries:
-- crawler: `scp_objects`, `documents`, `document_snapshots`
-- extractor: `extraction_runs`, `location_mentions`
-- geocoder: `geo_locations`, `document_locations`, canonical dictionary refresh side effects
-- analytics: `bi_*`
-- control: `pipeline_*`
-- presentation: no writes
-
-Implementation authority:
-- schema truth: `database/schema.sql`, `database/control_plane.sql`
-- runtime topology truth: `infra/docker-compose.yml`
-- behavior truth: `services/*`
-
-If prose conflicts with implementation, fix docs or flag the inconsistency.
-
-## Persistent Implementation Rules
-
-The following implementation rules are treated as carry-forward defaults unless a newer phase/user directive overrides them:
-
-- clean-start reproducibility: `docker compose up` on a clean system must be sufficient to run current behavior without manual DB SQL
-- existing-db reproducibility: startup/runtime migrations must patch schema changes needed by new code paths
-- geometry loading policy: if a location is geocoded, geometry lookup should be attempted regardless of specific OSM tag/class naming
-- hierarchy policy for polygon geographies: support multi-country and multi-admin links via deterministic spatial intersection when geometry exists
-- UI control policy for geocode refresh:
-  - canonical dictionary refresh is default-on
-  - missing-identity refresh is default-on
-  - explicit user control is provided only for from-scratch full geo refresh
+Backward compatibility is not a goal during the current refactor. Preserve behavior and operational topology, not obsolete internal APIs or code shapes.

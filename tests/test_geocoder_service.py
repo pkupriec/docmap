@@ -129,6 +129,7 @@ def test_process_all_mentions_resets_links_in_full_mode(monkeypatch) -> None:
     )
 
     monkeypatch.setattr("services.geocoder.service.get_connection", lambda: DummyConn())
+    monkeypatch.setattr("services.geocoder.service._consolidate_location_identities", lambda: None)
     monkeypatch.setattr("services.geocoder.service.clear_document_links_for_all_mentions", lambda _conn: 5)
     monkeypatch.setattr("services.geocoder.service.get_all_mentions", lambda _conn, **kwargs: [mention])
     monkeypatch.setattr(

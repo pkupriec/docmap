@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from services.geocoder import repository
+from services.geocoder.identity import location_identity_key
 
 
 @dataclass
@@ -62,6 +63,38 @@ class _DummyConn:
 
     def cursor(self) -> _DummyCursor:
         return self._cursor
+
+
+def test_city_identity_collapses_qualified_aliases_but_not_namesakes() -> None:
+    common = {
+        "precision": "city",
+        "location_rank": "city",
+        "region": "England",
+        "country": "United Kingdom",
+        "latitude": 51.5074456,
+        "longitude": -0.1277653,
+    }
+
+    assert location_identity_key({**common, "normalized_location": "London, England"}) == location_identity_key(
+        {**common, "normalized_location": "London, England, United Kingdom"}
+    )
+    assert location_identity_key({**common, "normalized_location": "London, United Kingdom"}) != location_identity_key(
+        {
+            **common,
+            "normalized_location": "London, Ontario, Canada",
+            "region": "Ontario",
+            "country": "Canada",
+            "latitude": 42.9836747,
+            "longitude": -81.2496068,
+        }
+    )
+
+
+def test_non_city_identity_prefers_canonical_then_osm() -> None:
+    assert location_identity_key({"canonical_id": "ne:country:FIN", "osm_type": "relation", "osm_id": 1}) == (
+        "canonical:ne:country:fin"
+    )
+    assert location_identity_key({"osm_type": "relation", "osm_id": "175342"}) == "osm:relation:175342"
 
 
 def test_resolve_canonical_identity_prefers_osm_concordance() -> None:

@@ -1,23 +1,30 @@
-FROM node:20-bookworm AS presentation-frontend-build
+ARG NODE_IMAGE=node:20-bookworm@sha256:8789e1e0752d81088a085689c04fdb7a5b16e8102e353118a4b049bbf05db8ac
+ARG PYTHON_IMAGE=python:3.11-bookworm@sha256:970c99f886b839fc8829289040c1845dadaf2cae46b37acc7710333158ec29b4
+
+FROM ${NODE_IMAGE} AS presentation-frontend-build
 WORKDIR /frontend
-COPY services/presentation/frontend/package.json /frontend/package.json
-RUN npm install
+COPY services/presentation/frontend/package.json services/presentation/frontend/package-lock.json /frontend/
+RUN npm ci
 COPY services/presentation/frontend /frontend
 RUN npm run build
 
-FROM python:3.11-bookworm
+FROM ${PYTHON_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
+ENV UV_PROJECT_ENVIRONMENT=/opt/docmap-venv
+ENV PATH="/opt/docmap-venv/bin:$PATH"
 
 WORKDIR /app
 
-COPY pyproject.toml README.md /app/
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+COPY pyproject.toml uv.lock README.md /app/
+RUN pip install --no-cache-dir uv==0.11.28 \
+    && uv sync --frozen --no-dev --no-install-project
 COPY . /app
-RUN pip install --no-cache-dir -e .
+RUN uv sync --frozen --no-dev
 
 COPY --from=presentation-frontend-build /frontend/dist /app/services/presentation/frontend/dist
 
 CMD ["uvicorn", "main_presentation:app", "--host", "0.0.0.0", "--port", "8080"]
-

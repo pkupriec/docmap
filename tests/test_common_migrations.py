@@ -16,6 +16,9 @@ def test_runtime_schema_patches_include_phase19_geo_location_columns(monkeypatch
         def execute(self, sql: str) -> None:
             executed_sql.append(sql)
 
+        def fetchall(self):
+            return []
+
     class DummyConn:
         autocommit = False
 
@@ -36,4 +39,5 @@ def test_runtime_schema_patches_include_phase19_geo_location_columns(monkeypatch
     assert "ADD COLUMN IF NOT EXISTS osm_admin_level INTEGER" in joined
     assert "ADD COLUMN IF NOT EXISTS boundary_intent BOOLEAN NOT NULL DEFAULT FALSE" in joined
     assert "ADD COLUMN IF NOT EXISTS geocode_candidates JSONB" in joined
-
+    assert "ADD COLUMN IF NOT EXISTS identity_key TEXT" in joined
+    assert "ADD COLUMN IF NOT EXISTS pdf_thumbnail_webp BYTEA" in joined
