@@ -6,6 +6,7 @@ from services.control.repository import ControlRepository
 class FakeCursor:
     def __init__(self) -> None:
         self.executed: list[tuple[str, tuple | None]] = []
+        self.rowcount = 1
 
     def execute(self, query: str, params=None):
         self.executed.append((query, params))
@@ -32,6 +33,9 @@ class FakeConn:
 
     def commit(self):
         return None
+
+    def transaction(self):
+        return self
 
     def __enter__(self):
         return self
@@ -70,3 +74,32 @@ def test_logs_query_orders_by_id_ascending(monkeypatch) -> None:
 
     query = cur.executed[0][0]
     assert "ORDER BY id ASC" in query
+
+
+def test_poll_next_command_atomically_claims_with_expiring_lease(monkeypatch) -> None:
+    cur = FakeCursor()
+    conn = FakeConn(cur)
+    repo = ControlRepository()
+    monkeypatch.setattr(repo, "_connect", lambda: conn)
+
+    repo.poll_next_command(lease_seconds=45)
+
+    query, params = cur.executed[0]
+    assert "FOR UPDATE SKIP LOCKED" in query
+    assert "lease_expires_at <= NOW()" in query
+    assert "UPDATE pipeline_commands AS command" in query
+    assert params is not None and params[1] == 45
+
+
+def test_complete_command_requires_matching_claim_when_provided(monkeypatch) -> None:
+    cur = FakeCursor()
+    conn = FakeConn(cur)
+    repo = ControlRepository()
+    monkeypatch.setattr(repo, "_connect", lambda: conn)
+
+    updated = repo.complete_command(7, "applied", claim_token="worker-claim")
+
+    query, params = cur.executed[0]
+    assert updated is True
+    assert "AND claim_token = %s" in query
+    assert params == ("applied", None, 7, "worker-claim")

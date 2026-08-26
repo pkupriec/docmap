@@ -4,43 +4,48 @@ import logging
 import os
 import threading
 import time
-import uuid
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from services.common.logging import configure_logging
-from services.pipeline.service import run_incremental_pipeline
+from services.control.repository import DuplicatePendingCommandError
+from services.pipeline.service import PipelineCommandService
 
 
 logger = logging.getLogger(__name__)
 _RUN_LOCK = threading.Lock()
 
 
-def run_scheduled_incremental_job(max_retries: int = 2) -> None:
+def run_scheduled_incremental_job(
+    max_retries: int = 2,
+    *,
+    command_service: PipelineCommandService | None = None,
+) -> None:
     if not _RUN_LOCK.acquire(blocking=False):
         logger.warning("scheduler.skip_overlapping_run")
         return
 
-    run_id = str(uuid.uuid4())
     started_at = time.time()
-    logger.info("scheduler.run_start run_id=%s", run_id)
+    logger.info("scheduler.enqueue_start")
+    service = command_service or PipelineCommandService()
 
     try:
         for attempt in range(1, max_retries + 2):
             try:
-                result = run_incremental_pipeline()
+                result = service.enqueue_incremental_run()
                 logger.info(
-                    "scheduler.run_success run_id=%s attempt=%s result=%s",
-                    run_id,
+                    "scheduler.enqueue_success command_id=%s attempt=%s",
+                    result.command_id,
                     attempt,
-                    result,
                 )
+                return
+            except DuplicatePendingCommandError:
+                logger.info("scheduler.enqueue_skipped reason=duplicate_pending_command")
                 return
             except Exception:
                 logger.exception(
-                    "scheduler.run_attempt_failed run_id=%s attempt=%s",
-                    run_id,
+                    "scheduler.enqueue_attempt_failed attempt=%s",
                     attempt,
                 )
                 if attempt > max_retries:
@@ -48,7 +53,7 @@ def run_scheduled_incremental_job(max_retries: int = 2) -> None:
                 time.sleep(2 ** (attempt - 1))
     finally:
         duration = round(time.time() - started_at, 2)
-        logger.info("scheduler.run_end run_id=%s duration_seconds=%s", run_id, duration)
+        logger.info("scheduler.enqueue_end duration_seconds=%s", duration)
         _RUN_LOCK.release()
 
 

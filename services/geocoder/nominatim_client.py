@@ -624,13 +624,3 @@ def infer_precision(*, city: str | None, region: str | None, country: str | None
     if country:
         return "country"
     return "unknown"
-    if admin_level is not None and admin_level > 0:
-        return f"admin_level_{admin_level}"
-
-    if (
-        normalized_type in {"national_park", "protected_area"}
-        or normalized_addresstype in {"national_park", "protected_area"}
-    ):
-        return "national_park"
-    if normalized_type in {"desert", "dune"} or normalized_addresstype in {"desert", "dune"}:
-        return "desert"

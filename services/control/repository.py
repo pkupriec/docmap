@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
@@ -66,60 +67,103 @@ class ControlRepository:
                 cur.execute("SELECT * FROM pipeline_commands WHERE id = %s", (command_id,))
                 return cur.fetchone()
 
-    def poll_next_command(self) -> dict[str, Any] | None:
+    def poll_next_command(self, *, lease_seconds: int = 30) -> dict[str, Any] | None:
+        """Atomically claim one available command.
+
+        An accepted command is invisible to other workers until its lease expires.
+        The claim token prevents a worker whose lease expired from completing a
+        command after another worker has reclaimed it.
+        """
+        claim_token = uuid4()
         with self._connect() as conn:
             with conn.transaction():
                 with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute(
                         """
-                        SELECT *
-                        FROM pipeline_commands
-                        WHERE status IN ('pending', 'accepted')
-                        ORDER BY
-                            CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
-                            id ASC
-                        FOR UPDATE SKIP LOCKED
-                        LIMIT 1
-                        """
-                    )
-                    row = cur.fetchone()
-                    if not row:
-                        return None
-                    if row["status"] == "pending":
-                        cur.execute(
-                            "UPDATE pipeline_commands SET status = 'accepted' WHERE id = %s",
-                            (row["id"],),
+                        WITH claimable AS (
+                            SELECT id
+                            FROM pipeline_commands
+                            WHERE status = 'pending'
+                               OR (
+                                    status = 'accepted'
+                                    AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
+                               )
+                            ORDER BY id ASC
+                            FOR UPDATE SKIP LOCKED
+                            LIMIT 1
                         )
-                        row["status"] = "accepted"
-                    return row
+                        UPDATE pipeline_commands AS command
+                        SET status = 'accepted',
+                            claim_token = %s,
+                            claimed_at = NOW(),
+                            lease_expires_at = NOW() + (%s * INTERVAL '1 second')
+                        FROM claimable
+                        WHERE command.id = claimable.id
+                        RETURNING command.*
+                        """,
+                        (claim_token, max(1, lease_seconds)),
+                    )
+                    return cur.fetchone()
 
-    def complete_command(self, command_id: int, status: str, error_message: str | None = None) -> None:
+    def complete_command(
+        self,
+        command_id: int,
+        status: str,
+        error_message: str | None = None,
+        *,
+        claim_token: object | None = None,
+    ) -> bool:
+        claim_filter = " AND claim_token = %s" if claim_token is not None else ""
+        params: list[Any] = [status, error_message, command_id]
+        if claim_token is not None:
+            params.append(claim_token)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     UPDATE pipeline_commands
                     SET status = %s,
                         processed_at = NOW(),
-                        error_message = %s
-                    WHERE id = %s
+                        error_message = %s,
+                        claim_token = NULL,
+                        claimed_at = NULL,
+                        lease_expires_at = NULL
+                    WHERE id = %s{claim_filter}
                     """,
-                    (status, error_message, command_id),
+                    tuple(params),
                 )
+                updated = bool(cur.rowcount)
             conn.commit()
+        return updated
 
-    def defer_command(self, command_id: int, payload_json: dict[str, Any]) -> None:
+    def defer_command(
+        self,
+        command_id: int,
+        payload_json: dict[str, Any],
+        *,
+        claim_token: object | None = None,
+    ) -> bool:
+        claim_filter = " AND claim_token = %s" if claim_token is not None else ""
+        params: list[Any] = [json.dumps(payload_json), command_id]
+        if claim_token is not None:
+            params.append(claim_token)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     UPDATE pipeline_commands
-                    SET status = 'accepted', payload_json = %s::jsonb
-                    WHERE id = %s
+                    SET status = 'pending',
+                        payload_json = %s::jsonb,
+                        claim_token = NULL,
+                        claimed_at = NULL,
+                        lease_expires_at = NULL
+                    WHERE id = %s{claim_filter}
                     """,
-                    (json.dumps(payload_json), command_id),
+                    tuple(params),
                 )
+                updated = bool(cur.rowcount)
             conn.commit()
+        return updated
 
     def find_active_run(self) -> dict[str, Any] | None:
         with self._connect() as conn:

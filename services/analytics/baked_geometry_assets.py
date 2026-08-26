@@ -4,44 +4,47 @@ import hashlib
 import json
 import logging
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
+from uuid import uuid4
 
-import mapbox_vector_tile
-import mercantile
-from mapbox_vector_tile import encoder
 from psycopg import Connection
 
 logger = logging.getLogger(__name__)
 
-WORLD_BOUNDS = (-180.0, -85.05112878, 180.0, 85.05112878)
+ARTIFACT_SCHEMA_VERSION = "v2"
 ZOOM_MIN_DEFAULT = 0
 ZOOM_MAX_DEFAULT = 8
-ZOOM_BANDS: dict[str, tuple[int, int]] = {
-    "world": (0, 2),
-    "regional": (3, 5),
-    "local": (6, ZOOM_MAX_DEFAULT),
+DEFAULT_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+DEFAULT_RELEASE_RETENTION = 2
+
+# Tippecanoe owns clipping, topology repair, and zoom-aware simplification.
+PRECISION_MODES: dict[str, tuple[str, ...]] = {
+    "full_precise": (
+        "--no-line-simplification",
+        "--no-tiny-polygon-reduction",
+    ),
+    "balanced_precise": ("--simplification=2",),
+    "simplified": ("--simplification=6",),
+    "primitive": (
+        "--simplification=10",
+        "--tiny-polygon-size=4",
+    ),
 }
-PRECISION_MODES: dict[str, dict[str, float]] = {
-    "full_precise": {"world": 0.0, "regional": 0.0, "local": 0.0},
-    "balanced_precise": {"world": 0.05, "regional": 0.01, "local": 0.002},
-    "simplified": {"world": 0.2, "regional": 0.05, "local": 0.01},
-    "primitive": {"world": 0.8, "regional": 0.2, "local": 0.05},
-}
-ARTIFACT_SCHEMA_VERSION = "v1"
-_PROGRESS_LOG_INTERVAL = 250
 
 BakedProgressCallback = Callable[[int, int], None]
+CommandRunner = Callable[[Sequence[str]], None]
 
 
 @dataclass(frozen=True)
 class BakedModeStats:
     mode: str
-    tile_count: int
     byte_size: int
-    tolerance_by_band: dict[str, float]
     path: Path
+    options: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -53,8 +56,8 @@ class BakedGeometryBuildResult:
     modes: dict[str, BakedModeStats]
 
     @property
-    def total_tiles(self) -> int:
-        return sum(mode.tile_count for mode in self.modes.values())
+    def total_archives(self) -> int:
+        return len(self.modes)
 
 
 def _project_root() -> Path:
@@ -62,27 +65,10 @@ def _project_root() -> Path:
 
 
 def _default_assets_root() -> Path:
+    configured = os.getenv("DOCMAP_PRESENTATION_ARTIFACT_ROOT")
+    if configured:
+        return Path(configured)
     return _project_root() / "services" / "analytics" / "assets" / "presentation_geometry"
-
-
-def _mode_alias(mode: str) -> str:
-    normalized = str(mode or "").strip().lower().replace(" ", "_")
-    aliases = {
-        "full_precise": "full_precise",
-        "balanced_precise": "balanced_precise",
-        "simplified": "simplified",
-        "primitive": "primitive",
-        "full precise": "full_precise",
-        "balanced precise": "balanced_precise",
-    }
-    return aliases.get(normalized, normalized)
-
-
-def _zoom_band(zoom: int) -> str:
-    for band, (z_min, z_max) in ZOOM_BANDS.items():
-        if z_min <= zoom <= z_max:
-            return band
-    return "local"
 
 
 def _query_boundary_features(conn: Connection) -> list[dict[str, Any]]:
@@ -98,30 +84,26 @@ def _query_boundary_features(conn: Connection) -> list[dict[str, Any]]:
 
     features: list[dict[str, Any]] = []
     for location_id, location_rank, payload in rows:
-        parsed: dict[str, Any]
         if isinstance(payload, dict):
             parsed = payload
         else:
             try:
                 parsed = json.loads(payload)
-            except Exception:
+            except (TypeError, json.JSONDecodeError):
                 continue
         geometry = parsed.get("geometry")
-        if not isinstance(geometry, dict):
-            continue
-        if geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+        if not isinstance(geometry, dict) or geometry.get("type") not in {"Polygon", "MultiPolygon"}:
             continue
         properties = parsed.get("properties")
         if not isinstance(properties, dict):
             properties = {}
-        location_name = str(properties.get("location_name") or location_id)
         features.append(
             {
                 "type": "Feature",
                 "properties": {
                     "location_id": str(location_id),
                     "location_rank": str(location_rank or properties.get("location_rank") or "unknown"),
-                    "location_name": location_name,
+                    "location_name": str(properties.get("location_name") or location_id),
                 },
                 "geometry": geometry,
             }
@@ -129,115 +111,145 @@ def _query_boundary_features(conn: Connection) -> list[dict[str, Any]]:
     return features
 
 
-def _geometry_bbox(geometry: dict[str, Any]) -> tuple[float, float, float, float] | None:
-    lons: list[float] = []
-    lats: list[float] = []
-
-    def walk(node: Any) -> None:
-        if isinstance(node, (list, tuple)) and node and isinstance(node[0], (int, float)):
-            lons.append(float(node[0]))
-            lats.append(float(node[1]))
-        elif isinstance(node, (list, tuple)):
-            for item in node:
-                walk(item)
-
-    walk(geometry.get("coordinates"))
-    if not lons:
-        return None
-    return (min(lons), min(lats), max(lons), max(lats))
-
-
-def _quantize(value: float, tolerance: float) -> float:
-    if tolerance <= 0:
-        return float(value)
-    return round(float(value) / tolerance) * tolerance
-
-
-def _simplify_ring(ring: list[list[float]], tolerance: float) -> list[list[float]]:
-    if tolerance <= 0 or len(ring) < 4:
-        return [[float(point[0]), float(point[1])] for point in ring]
-
-    simplified: list[list[float]] = []
-    for point in ring:
-        quantized = [_quantize(float(point[0]), tolerance), _quantize(float(point[1]), tolerance)]
-        if not simplified or simplified[-1] != quantized:
-            simplified.append(quantized)
-
-    if simplified and simplified[0] != simplified[-1]:
-        simplified.append(list(simplified[0]))
-
-    if len(simplified) < 4:
-        return [[float(point[0]), float(point[1])] for point in ring]
-    return simplified
-
-
-def _simplify_geometry(geometry: dict[str, Any], tolerance: float) -> dict[str, Any]:
-    geometry_type = str(geometry.get("type") or "")
-    coordinates = geometry.get("coordinates")
-    if tolerance <= 0:
-        return {
-            "type": geometry_type,
-            "coordinates": coordinates,
-        }
-
-    if geometry_type == "Polygon" and isinstance(coordinates, list):
-        rings = [_simplify_ring(ring, tolerance) for ring in coordinates if isinstance(ring, list)]
-        return {"type": "Polygon", "coordinates": rings}
-    if geometry_type == "MultiPolygon" and isinstance(coordinates, list):
-        polygons: list[list[list[list[float]]]] = []
-        for polygon in coordinates:
-            if not isinstance(polygon, list):
-                continue
-            polygons.append([_simplify_ring(ring, tolerance) for ring in polygon if isinstance(ring, list)])
-        return {"type": "MultiPolygon", "coordinates": polygons}
-    return geometry
-
-
-def _tile_windows(zoom_min: int, zoom_max: int) -> list[tuple[int, int, int]]:
-    tiles: list[tuple[int, int, int]] = []
-    for zoom in range(zoom_min, zoom_max + 1):
-        for tile in mercantile.tiles(*WORLD_BOUNDS, [zoom]):
-            tiles.append((tile.z, tile.x, tile.y))
-    return tiles
-
-
-def _tile_feature_index(
-    indexed_features: list[tuple[tuple[float, float, float, float], dict[str, Any]]],
+def _artifact_version(
+    features: list[dict[str, Any]],
     *,
     zoom_min: int,
     zoom_max: int,
-) -> dict[tuple[int, int, int], tuple[int, ...]]:
-    tile_to_feature_ids: dict[tuple[int, int, int], set[int]] = {}
-    for feature_id, (bbox, _feature) in enumerate(indexed_features):
-        west, south, east, north = bbox
-        south = max(south, WORLD_BOUNDS[1])
-        north = min(north, WORLD_BOUNDS[3])
-        if south > north:
-            continue
-        for zoom in range(zoom_min, zoom_max + 1):
-            for tile in mercantile.tiles(west, south, east, north, [zoom]):
-                tile_key = (tile.z, tile.x, tile.y)
-                tile_to_feature_ids.setdefault(tile_key, set()).add(feature_id)
-    return {tile_key: tuple(sorted(feature_ids)) for tile_key, feature_ids in tile_to_feature_ids.items()}
-
-
-def _artifact_version(features: list[dict[str, Any]], mode_tolerances: dict[str, dict[str, float]]) -> str:
+    mode_options: dict[str, tuple[str, ...]],
+) -> str:
     payload = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
-        "mode_tolerances": mode_tolerances,
-        "features": [
-            {
-                "location_id": feature["properties"]["location_id"],
-                "location_rank": feature["properties"]["location_rank"],
-                "location_name": feature["properties"]["location_name"],
-                "geometry": feature["geometry"],
-            }
-            for feature in features
-        ],
+        "min_zoom": zoom_min,
+        "max_zoom": zoom_max,
+        "mode_options": mode_options,
+        "features": features,
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    digest = hashlib.sha256(encoded).hexdigest()[:16]
-    return f"{ARTIFACT_SCHEMA_VERSION}-{digest}"
+    return f"{ARTIFACT_SCHEMA_VERSION}-{hashlib.sha256(encoded).hexdigest()[:16]}"
+
+
+def _resolve_tippecanoe_binary() -> str:
+    configured = os.getenv("TIPPECANOE_BIN", "tippecanoe")
+    resolved = shutil.which(configured)
+    if resolved:
+        return resolved
+    candidate = Path(configured)
+    if candidate.is_file():
+        return str(candidate.resolve())
+    raise RuntimeError(
+        "tippecanoe executable is unavailable; install the pinned runtime image or set TIPPECANOE_BIN"
+    )
+
+
+def _run_command(command: Sequence[str]) -> None:
+    try:
+        subprocess.run(list(command), check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise RuntimeError(f"tippecanoe failed with exit code {exc.returncode}: {detail}") from exc
+
+
+def _tippecanoe_command(
+    *,
+    executable: str,
+    source_path: Path,
+    output_path: Path,
+    zoom_min: int,
+    zoom_max: int,
+    mode_options: Sequence[str],
+) -> list[str]:
+    return [
+        executable,
+        "--force",
+        f"--output={output_path}",
+        "--layer=boundaries",
+        f"--minimum-zoom={zoom_min}",
+        f"--maximum-zoom={zoom_max}",
+        "--projection=EPSG:4326",
+        "--preserve-input-order",
+        "--no-feature-limit",
+        "--no-tile-size-limit",
+        "--no-simplification-of-shared-nodes",
+        "--include=location_id",
+        "--include=location_rank",
+        "--include=location_name",
+        *mode_options,
+        str(source_path),
+    ]
+
+
+def _validate_archive(path: Path, *, max_bytes: int) -> int:
+    if not path.is_file():
+        raise RuntimeError(f"tippecanoe did not create expected archive: {path}")
+    byte_size = path.stat().st_size
+    if byte_size <= 8:
+        raise RuntimeError(f"generated PMTiles archive is empty: {path}")
+    if byte_size > max_bytes:
+        raise RuntimeError(
+            f"generated PMTiles archive exceeds budget: path={path} bytes={byte_size} max={max_bytes}"
+        )
+    with path.open("rb") as stream:
+        if stream.read(7) != b"PMTiles":
+            raise RuntimeError(f"generated artifact is not a PMTiles v3 archive: {path}")
+    return byte_size
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def _prune_old_releases(root: Path, *, current_version: str) -> None:
+    retention = max(
+        1,
+        int(os.getenv("DOCMAP_PRESENTATION_ARTIFACT_RETENTION", str(DEFAULT_RELEASE_RETENTION))),
+    )
+    releases = sorted(
+        (
+            path
+            for path in root.iterdir()
+            if path.is_dir()
+            and not path.name.startswith(".")
+            and (path / "manifest.json").is_file()
+        ),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    keep = {current_version}
+    for release in releases:
+        if len(keep) >= retention:
+            break
+        keep.add(release.name)
+    for release in releases:
+        if release.name not in keep:
+            shutil.rmtree(release)
+
+
+def _result_from_manifest(root: Path, manifest_path: Path) -> BakedGeometryBuildResult:
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    modes: dict[str, BakedModeStats] = {}
+    for mode, raw in payload.get("modes", {}).items():
+        archive = root / str(raw["path"])
+        if not archive.is_file():
+            raise RuntimeError(f"published PMTiles archive is missing: {archive}")
+        modes[mode] = BakedModeStats(
+            mode=mode,
+            byte_size=int(raw["byte_size"]),
+            path=archive,
+            options=tuple(str(item) for item in raw.get("options", ())),
+        )
+    return BakedGeometryBuildResult(
+        version=str(payload["version"]),
+        root_path=root,
+        manifest_path=manifest_path,
+        source_feature_count=int(payload["source_feature_count"]),
+        modes=modes,
+    )
 
 
 def build_baked_geometry_assets(
@@ -246,156 +258,129 @@ def build_baked_geometry_assets(
     assets_root: Path | None = None,
     zoom_min: int = ZOOM_MIN_DEFAULT,
     zoom_max: int = ZOOM_MAX_DEFAULT,
-    mode_tolerances: dict[str, dict[str, float]] | None = None,
-    on_tile_progress: BakedProgressCallback | None = None,
+    mode_options: dict[str, tuple[str, ...]] | None = None,
+    on_progress: BakedProgressCallback | None = None,
+    command_runner: CommandRunner | None = None,
+    tippecanoe_binary: str | None = None,
+    max_archive_bytes: int | None = None,
 ) -> BakedGeometryBuildResult:
-    root = assets_root or Path(os.getenv("DOCMAP_PRESENTATION_BAKED_GEOMETRY_ROOT", str(_default_assets_root())))
-    tolerances = mode_tolerances or PRECISION_MODES
+    if zoom_min < 0 or zoom_max < zoom_min:
+        raise ValueError("invalid PMTiles zoom range")
 
+    root = assets_root or _default_assets_root()
+    root.mkdir(parents=True, exist_ok=True)
+    options = mode_options or PRECISION_MODES
     features = _query_boundary_features(conn)
-    features.sort(key=lambda item: str(item["properties"]["location_id"]))
-    version = _artifact_version(features, tolerances)
-
+    features.sort(key=lambda feature: str(feature["properties"]["location_id"]))
+    version = _artifact_version(features, zoom_min=zoom_min, zoom_max=zoom_max, mode_options=options)
     version_root = root / version
-    version_root.mkdir(parents=True, exist_ok=True)
-    indexed: list[tuple[tuple[float, float, float, float], dict[str, Any]]] = []
-    for feature in features:
-        bbox = _geometry_bbox(feature["geometry"])
-        if bbox is None:
-            continue
-        indexed.append((bbox, feature))
-    tile_index = _tile_feature_index(indexed, zoom_min=zoom_min, zoom_max=zoom_max)
-    tiles = sorted(tile_index.keys(), key=lambda item: (item[0], item[1], item[2]))
-
-    mode_results: dict[str, BakedModeStats] = {}
-    total_tile_jobs = len(tiles) * len(tolerances)
-    processed_tile_jobs = 0
-    if on_tile_progress:
-        on_tile_progress(processed_tile_jobs, total_tile_jobs)
-
-    for mode_name, tolerance_by_band in sorted(tolerances.items()):
-        canonical_mode = _mode_alias(mode_name)
-        mode_root = version_root / canonical_mode
-        tile_count = 0
-        total_bytes = 0
-
-        for z, x, y in tiles:
-            bounds = mercantile.bounds(x, y, z)
-            west, south, east, north = bounds.west, bounds.south, bounds.east, bounds.north
-            selected_rows: list[dict[str, Any]] = []
-            band = _zoom_band(z)
-            tolerance = float(tolerance_by_band.get(band, 0.0))
-
-            for feature_id in tile_index.get((z, x, y), ()):
-                _bbox, feature = indexed[feature_id]
-                simplified_geometry = _simplify_geometry(feature["geometry"], tolerance=tolerance)
-                selected_rows.append(
-                    {
-                        "id": feature["properties"]["location_id"],
-                        "geometry": simplified_geometry,
-                        "properties": {
-                            "location_id": feature["properties"]["location_id"],
-                            "location_rank": feature["properties"]["location_rank"],
-                            "location_name": feature["properties"]["location_name"],
-                        },
-                    }
-                )
-
-            if not selected_rows:
-                processed_tile_jobs += 1
-                if on_tile_progress and (
-                    processed_tile_jobs == total_tile_jobs
-                    or processed_tile_jobs == 1
-                    or processed_tile_jobs % _PROGRESS_LOG_INTERVAL == 0
-                ):
-                    on_tile_progress(processed_tile_jobs, total_tile_jobs)
-                continue
-
-            payload = mapbox_vector_tile.encode(
-                [{"name": "boundaries", "features": selected_rows}],
-                default_options={
-                    "quantize_bounds": (west, south, east, north),
-                    "extents": 4096,
-                    "on_invalid_geometry": encoder.on_invalid_geometry_make_valid,
-                    "check_winding_order": True,
-                },
-            )
-            destination = mode_root / str(z) / str(x) / f"{y}.mvt"
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(payload)
-            tile_count += 1
-            total_bytes += len(payload)
-            processed_tile_jobs += 1
-            if on_tile_progress and (
-                processed_tile_jobs == total_tile_jobs
-                or processed_tile_jobs == 1
-                or processed_tile_jobs % _PROGRESS_LOG_INTERVAL == 0
-            ):
-                on_tile_progress(processed_tile_jobs, total_tile_jobs)
-
-        mode_results[canonical_mode] = BakedModeStats(
-            mode=canonical_mode,
-            tile_count=tile_count,
-            byte_size=total_bytes,
-            tolerance_by_band={
-                "world": float(tolerance_by_band.get("world", 0.0)),
-                "regional": float(tolerance_by_band.get("regional", 0.0)),
-                "local": float(tolerance_by_band.get("local", 0.0)),
-            },
-            path=mode_root,
-        )
-
-    manifest_payload = {
-        "schema_version": ARTIFACT_SCHEMA_VERSION,
-        "version": version,
-        "source_feature_count": len(features),
-        "source_table": "bi_admin_boundaries",
-        "tile_format": "mvt_zxy_directory",
-        "zoom_min": zoom_min,
-        "zoom_max": zoom_max,
-        "modes": {
-            mode: {
-                "path": str(result.path.relative_to(root)),
-                "tile_count": result.tile_count,
-                "byte_size": result.byte_size,
-                "tolerance_by_zoom_band": result.tolerance_by_band,
-            }
-            for mode, result in sorted(mode_results.items())
-        },
-    }
     manifest_path = version_root / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-        encoding="utf-8",
-    )
 
-    current_pointer = root / "current.json"
-    current_pointer.write_text(
-        json.dumps(
+    if manifest_path.is_file():
+        result = _result_from_manifest(root, manifest_path)
+        _atomic_write_json(
+            root / "current.json",
             {
                 "schema_version": ARTIFACT_SCHEMA_VERSION,
                 "current_version": version,
-                "manifest": str(manifest_path.relative_to(root)),
+                "manifest": f"{version}/manifest.json",
             },
-            ensure_ascii=False,
-            sort_keys=True,
-            indent=2,
         )
-        + "\n",
-        encoding="utf-8",
-    )
+        _prune_old_releases(root, current_version=version)
+        return result
 
+    runner = command_runner or _run_command
+    executable = tippecanoe_binary or _resolve_tippecanoe_binary()
+    archive_budget = max_archive_bytes or int(
+        os.getenv("DOCMAP_PRESENTATION_MAX_ARCHIVE_BYTES", str(DEFAULT_MAX_ARCHIVE_BYTES))
+    )
+    staging_root = root / f".{version}.building-{uuid4().hex}"
+    staging_root.mkdir(parents=True, exist_ok=False)
+    total = len(options)
+    completed = 0
+    if on_progress:
+        on_progress(completed, total)
+
+    try:
+        source_path = staging_root / "boundaries.geojson"
+        source_path.write_text(
+            json.dumps(
+                {"type": "FeatureCollection", "features": features},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+
+        mode_results: dict[str, BakedModeStats] = {}
+        for mode, current_options in options.items():
+            archive_path = staging_root / f"{mode}.pmtiles"
+            command = _tippecanoe_command(
+                executable=executable,
+                source_path=source_path,
+                output_path=archive_path,
+                zoom_min=zoom_min,
+                zoom_max=zoom_max,
+                mode_options=current_options,
+            )
+            logger.info("analytics.pmtiles_build_start mode=%s", mode)
+            runner(command)
+            byte_size = _validate_archive(archive_path, max_bytes=archive_budget)
+            mode_results[mode] = BakedModeStats(
+                mode=mode,
+                byte_size=byte_size,
+                path=version_root / archive_path.name,
+                options=tuple(current_options),
+            )
+            completed += 1
+            if on_progress:
+                on_progress(completed, total)
+            logger.info("analytics.pmtiles_build_done mode=%s bytes=%s", mode, byte_size)
+
+        source_path.unlink()
+        manifest_payload = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "version": version,
+            "source_feature_count": len(features),
+            "source_table": "bi_admin_boundaries",
+            "tile_format": "pmtiles",
+            "layer": "boundaries",
+            "min_zoom": zoom_min,
+            "max_zoom": zoom_max,
+            "modes": {
+                mode: {
+                    "path": f"{version}/{mode}.pmtiles",
+                    "byte_size": stats.byte_size,
+                    "options": list(stats.options),
+                }
+                for mode, stats in mode_results.items()
+            },
+        }
+        (staging_root / "manifest.json").write_text(
+            json.dumps(manifest_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(staging_root, version_root)
+        _atomic_write_json(
+            root / "current.json",
+            {
+                "schema_version": ARTIFACT_SCHEMA_VERSION,
+                "current_version": version,
+                "manifest": f"{version}/manifest.json",
+            },
+        )
+        _prune_old_releases(root, current_version=version)
+    except Exception:
+        shutil.rmtree(staging_root, ignore_errors=True)
+        raise
+
+    result = _result_from_manifest(root, manifest_path)
     logger.info(
-        "analytics.baked_geometry_assets_built root=%s version=%s source_features=%s total_tiles=%s",
+        "analytics.pmtiles_assets_published root=%s version=%s source_features=%s total_bytes=%s",
         root,
         version,
         len(features),
-        sum(item.tile_count for item in mode_results.values()),
+        sum(item.byte_size for item in result.modes.values()),
     )
-    return BakedGeometryBuildResult(
-        version=version,
-        root_path=root,
-        manifest_path=manifest_path,
-        source_feature_count=len(features),
-        modes=mode_results,
-    )
+    return result

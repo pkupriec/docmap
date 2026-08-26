@@ -34,6 +34,7 @@ TABLE_DROP_ORDER = (
     "bi_documents",
     # Operational
     "document_locations",
+    "geo_location_aliases",
     "geo_locations",
     "location_mentions",
     "extraction_runs",
@@ -161,6 +162,30 @@ def _apply_runtime_schema_patches() -> None:
     with get_connection() as conn:
         conn.autocommit = True
         with conn.cursor() as cur:
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS pipeline_commands
+                ADD COLUMN IF NOT EXISTS claim_token UUID
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS pipeline_commands
+                ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS pipeline_commands
+                ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_pipeline_commands_claimable
+                ON pipeline_commands(status, lease_expires_at, id ASC)
+                """
+            )
             cur.execute(
                 """
                 ALTER TABLE IF EXISTS document_snapshots
@@ -311,6 +336,42 @@ def _apply_runtime_schema_patches() -> None:
             )
             cur.execute(
                 """
+                ALTER TABLE IF EXISTS geo_locations
+                ADD COLUMN IF NOT EXISTS identity_key TEXT
+                """
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_geo_locations_identity_key
+                ON geo_locations(identity_key)
+                WHERE identity_key IS NOT NULL
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS geo_location_aliases (
+                    normalized_location TEXT PRIMARY KEY,
+                    location_id UUID NOT NULL REFERENCES geo_locations(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_geo_location_aliases_location_id
+                ON geo_location_aliases(location_id)
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO geo_location_aliases (normalized_location, location_id)
+                SELECT normalized_location, id
+                FROM geo_locations
+                ON CONFLICT (normalized_location) DO NOTHING
+                """
+            )
+            cur.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_geo_locations_osm_identity
                 ON geo_locations(osm_type, osm_id)
                 """
@@ -389,6 +450,12 @@ def _apply_runtime_schema_patches() -> None:
                     updated_at TIMESTAMP NOT NULL DEFAULT now(),
                     PRIMARY KEY (ancestor_location_id, descendant_location_id)
                 )
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS document_snapshots
+                ADD COLUMN IF NOT EXISTS pdf_thumbnail_webp BYTEA
                 """
             )
             cur.execute(
@@ -479,11 +546,11 @@ def run_startup_migrations() -> None:
         max_wait_seconds=int(os.getenv("DB_STARTUP_MAX_WAIT_SECONDS", "30")),
         interval_seconds=float(os.getenv("DB_STARTUP_RETRY_INTERVAL_SECONDS", "1")),
     )
-    _apply_runtime_schema_patches()
 
     flag = os.getenv("DB_RESET_ON_START", "0").strip().lower()
     should_reset = flag in {"1", "true", "yes", "on"}
     if not should_reset:
+        _apply_runtime_schema_patches()
         logger.info("db.migrations.skip_reset_on_start")
         return
 
@@ -510,9 +577,9 @@ def run_startup_migrations() -> None:
                 schema_exists = cur.fetchone()[0] is not None
                 if schema_exists:
                     logger.info("db.migrations.apply_skip reason=schema_exists mode=apply_only")
-                    logger.warning("db.migrations.reset_done")
-                    return
-            for sql_path in sql_paths:
-                logger.info("db.migrations.apply path=%s", sql_path)
-                cur.execute(_read_sql(sql_path))
+            if should_drop or not schema_exists:
+                for sql_path in sql_paths:
+                    logger.info("db.migrations.apply path=%s", sql_path)
+                    cur.execute(_read_sql(sql_path))
+    _apply_runtime_schema_patches()
     logger.warning("db.migrations.reset_done")

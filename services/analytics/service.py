@@ -168,7 +168,7 @@ def build_bi_locations(conn: Connection) -> int:
                 gl.osm_boundingbox,
                 COALESCE(docs.document_count, 0) AS document_count
             FROM geo_locations gl
-            LEFT JOIN (
+            JOIN (
                 SELECT location_id, COUNT(DISTINCT document_id) AS document_count
                 FROM document_locations
                 GROUP BY location_id
@@ -562,8 +562,8 @@ def build_presentation_baked_geometry(
     *,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> int:
-    result = build_baked_geometry_assets(conn, on_tile_progress=on_progress)
-    return result.total_tiles
+    result = build_baked_geometry_assets(conn, on_progress=on_progress)
+    return result.total_archives
 
 
 def rebuild_analytics(

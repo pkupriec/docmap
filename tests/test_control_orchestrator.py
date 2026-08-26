@@ -38,7 +38,7 @@ class FakeRepo:
         if self.active_run and self.active_run["id"] == run_id:
             self.active_run["status"] = "cancelling"
 
-    def defer_command(self, command_id: int, payload_json: dict) -> None:
+    def defer_command(self, command_id: int, payload_json: dict, **_kwargs) -> None:
         self.deferred[command_id] = payload_json
 
     def create_run(self, **kwargs):
@@ -56,7 +56,7 @@ class FakeRepo:
     def append_log(self, *args, **kwargs):
         return 1
 
-    def complete_command(self, command_id: int, status: str, error_message: str | None = None):
+    def complete_command(self, command_id: int, status: str, error_message: str | None = None, **_kwargs):
         self.completed.append((command_id, status, error_message))
 
     def run_exists(self, run_id: int) -> bool:
@@ -121,6 +121,11 @@ def test_start_run_replace_semantics_sets_active_to_cancelling_then_defers() -> 
 
 def test_retry_run_creates_new_run_and_keeps_old_run_unchanged() -> None:
     repo = FakeRepo()
+    repo.runs[1]["parameters_json"] = {
+        "pipeline_type": "full_pipeline",
+        "target_scope": "all",
+        "options": {"process_unprocessed_only": True, "refresh_geo_identity": False},
+    }
     orchestrator = ControlOrchestrator(repository=repo)
 
     command = {
@@ -136,6 +141,12 @@ def test_retry_run_creates_new_run_and_keeps_old_run_unchanged() -> None:
     assert len(repo.created_runs) == 1
     created = repo.created_runs[0]
     assert created["replacement_for_run_id"] == 1
+    assert created["parameters_json"]["options"] == {
+        "process_unprocessed_only": True,
+        "refresh_geo_identity": False,
+        "force": True,
+    }
+    assert "force" not in created["parameters_json"]
     assert repo.runs[1]["status"] == "failed"
     assert repo.completed[-1][1] == "applied"
 
@@ -265,6 +276,19 @@ class _AnalyticsStageRepo(_StageRepo):
     def upsert_progress(self, *args, **kwargs):
         self.progress_updates.append(dict(kwargs))
         return None
+
+
+def test_export_stage_is_zero_work_success_without_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _AnalyticsStageRepo()
+    orchestrator = ControlOrchestrator(repository=repo)
+    monkeypatch.setattr(orchestrator_module, "configured_export_items", lambda: ())
+    monkeypatch.setattr(orchestrator_module, "run_configured_export", lambda **_kwargs: ())
+
+    orchestrator._run_stage(1, "export", {"parameters_json": {"options": {}}})
+
+    assert any("no exporter configured" in log for log in repo.logs)
+    assert repo.progress_updates[-1]["total_items"] == 0
+    assert repo.progress_updates[-1]["items_completed"] == 0
 
 
 def test_analytics_stage_reports_baked_geometry_detail_progress(monkeypatch: pytest.MonkeyPatch) -> None:

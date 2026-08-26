@@ -58,7 +58,7 @@ def test_rebuild_admin_boundaries_script_runs_source_and_asset_builders(
             {
                 "version": "v1-test",
                 "manifest_path": tmp_path / "presentation_geometry" / "v1-test" / "manifest.json",
-                "total_tiles": 42,
+                "total_archives": 4,
             },
         )(),
     )
@@ -76,7 +76,7 @@ def test_rebuild_admin_boundaries_script_runs_source_and_asset_builders(
     assert payload["matched_by_rank"] == {"country": 3, "ocean": 2}
     assert payload["total_by_rank"] == {"country": 5, "ocean": 2}
     assert payload["baked_geometry_version"] == "v1-test"
-    assert payload["baked_geometry_total_tiles"] == 42
+    assert payload["baked_geometry_total_archives"] == 4
 
 
 def test_rebuild_admin_boundaries_script_can_reuse_existing_source(
@@ -111,7 +111,7 @@ def test_rebuild_admin_boundaries_script_can_reuse_existing_source(
             {
                 "version": "v1-test",
                 "manifest_path": tmp_path / "presentation_geometry" / "v1-test" / "manifest.json",
-                "total_tiles": 7,
+                "total_archives": 4,
             },
         )(),
     )
@@ -122,4 +122,4 @@ def test_rebuild_admin_boundaries_script_can_reuse_existing_source(
     payload = json.loads(capsys.readouterr().out)
     assert payload["refreshed_source"] is False
     assert payload["source_stats"] == {"skipped_refresh": True}
-    assert payload["baked_geometry_total_tiles"] == 7
+    assert payload["baked_geometry_total_archives"] == 4

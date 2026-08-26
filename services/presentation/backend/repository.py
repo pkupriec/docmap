@@ -1,37 +1,22 @@
 from __future__ import annotations
 
-import json
 import logging
 import math
 import re
 import time
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from typing import Literal
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
+from psycopg import Connection
+
 from services.common.db import get_connection
+from services.presentation.backend.boundaries_repository import BoundariesRepository
 
 logger = logging.getLogger(__name__)
 _WHITESPACE_RE = re.compile(r"\s+")
-_BOUNDARY_ADMIN_LEVEL_RE = re.compile(r"^admin_level_(\d+)$")
-_VIEWPORT_BUCKET_RE = re.compile(
-    r"^(?P<band>world|regional|local):(?P<west>-?\d+):(?P<south>-?\d+):(?P<east>-?\d+):(?P<north>-?\d+)$"
-)
-_BOUNDARY_CHUNK_RE = re.compile(r"^(?P<band>world|regional|local):(?P<column>\d+):(?P<row>\d+)$")
-
-RankFilter = Literal["default", "all"]
-DEFAULT_BOUNDARY_RANKS: tuple[str, ...] = ("city", "admin_region", "country", "continent", "ocean")
-VIEWPORT_BUCKET_SCHEMES: dict[str, tuple[int, int]] = {
-    "world": (45, 30),
-    "regional": (20, 12),
-    "local": (8, 6),
-}
-BOUNDARY_CHUNK_SCHEMES: dict[str, tuple[int, int, int, int]] = {
-    "world": (45, 30, 8, 6),
-    "regional": (20, 12, 18, 15),
-    "local": (8, 6, 45, 30),
-}
+ConnectionProvider = Callable[[], AbstractContextManager[Connection]]
 
 
 @dataclass(frozen=True)
@@ -50,91 +35,16 @@ class ScopedLocationDocuments:
 
 
 @dataclass(frozen=True)
-class ViewportBucket:
-    bucket_id: str
-    band: str
-    bbox: tuple[float, float, float, float]
+class LocationDocumentsResult:
+    resolved: ResolvedLocation | None
+    location_display: str | None
+    scoped: ScopedLocationDocuments | None
 
 
-@dataclass(frozen=True)
-class BoundaryChunk:
-    chunk_id: str
-    band: str
-    column: int
-    row: int
-    bbox: tuple[float, float, float, float]
+class PresentationRepository(BoundariesRepository):
+    def __init__(self, connection_provider: ConnectionProvider | None = None) -> None:
+        super().__init__(connection_provider or get_connection)
 
-
-def _normalize_longitude(value: float) -> float:
-    normalized = ((value + 180.0) % 360.0) - 180.0
-    if math.isclose(normalized, -180.0) and value > 0:
-        return 180.0
-    return normalized
-
-
-def parse_viewport_bucket(raw_bucket: str) -> ViewportBucket:
-    match = _VIEWPORT_BUCKET_RE.match(str(raw_bucket).strip())
-    if match is None:
-        raise ValueError("viewport_bucket must match {world|regional|local}:west:south:east:north")
-
-    band = match.group("band")
-    lon_step, lat_step = VIEWPORT_BUCKET_SCHEMES[band]
-    west = int(match.group("west"))
-    south = int(match.group("south"))
-    east = int(match.group("east"))
-    north = int(match.group("north"))
-
-    if west < -180 or west > 180 or east < -180 or east > 180:
-        raise ValueError("viewport_bucket longitudes must stay within [-180, 180]")
-    if south < -90 or south > 90 or north < -90 or north > 90 or south > north:
-        raise ValueError("viewport_bucket latitudes must satisfy -90 <= south <= north <= 90")
-    if west % lon_step != 0 or east % lon_step != 0:
-        raise ValueError(f"viewport_bucket longitudes must align to the {band} longitude step")
-    if south % lat_step != 0 or north % lat_step != 0:
-        raise ValueError(f"viewport_bucket latitudes must align to the {band} latitude step")
-
-    bucket_id = f"{band}:{west}:{south}:{east}:{north}"
-    return ViewportBucket(
-        bucket_id=bucket_id,
-        band=band,
-        bbox=(
-            float(_normalize_longitude(float(west))),
-            float(south),
-            float(_normalize_longitude(float(east))),
-            float(north),
-        ),
-    )
-
-
-def parse_boundary_chunk(raw_chunk: str) -> BoundaryChunk:
-    match = _BOUNDARY_CHUNK_RE.match(str(raw_chunk).strip())
-    if match is None:
-        raise ValueError("chunk_ids entries must match {world|regional|local}:column:row")
-
-    band = match.group("band")
-    lon_step, lat_step, lon_cells, lat_cells = BOUNDARY_CHUNK_SCHEMES[band]
-    column = int(match.group("column"))
-    row = int(match.group("row"))
-
-    if column < 0 or column >= lon_cells:
-        raise ValueError(f"chunk_ids column must stay within [0, {lon_cells - 1}] for {band}")
-    if row < 0 or row >= lat_cells:
-        raise ValueError(f"chunk_ids row must stay within [0, {lat_cells - 1}] for {band}")
-
-    west = -180 + column * lon_step
-    east = west + lon_step
-    south = -90 + row * lat_step
-    north = south + lat_step
-    return BoundaryChunk(
-        chunk_id=f"{band}:{column}:{row}",
-        band=band,
-        column=column,
-        row=row,
-        bbox=(float(west), float(south), float(_normalize_longitude(float(east))), float(north)),
-    )
-
-
-class PresentationRepository:
     def _normalize_text(self, value: object | None) -> str:
         return _WHITESPACE_RE.sub(" ", str(value or "").strip().lower())
 
@@ -143,77 +53,6 @@ class PresentationRepository:
         if value == "region":
             return "admin_region"
         return value or "unknown"
-
-    def _boundary_rank_sort_value(self, rank: str) -> int:
-        normalized = self._normalize_rank(rank)
-        if normalized == "ocean":
-            return 0
-        if normalized == "continent":
-            return 1
-        if normalized == "country":
-            return 2
-        if normalized == "admin_region":
-            return 3
-        if normalized == "city":
-            return 4
-        if normalized in {"national_park", "desert"}:
-            return 5
-        admin_level = _BOUNDARY_ADMIN_LEVEL_RE.match(normalized)
-        if admin_level is not None:
-            return 10 + int(admin_level.group(1))
-        if normalized == "unknown":
-            return 90
-        return 99
-
-    def _normalize_boundary_ranks(
-        self,
-        ranks: tuple[str, ...] | list[str] | None,
-        *,
-        rank_filter: RankFilter,
-    ) -> tuple[str, ...] | None:
-        if ranks:
-            canonical = {self._normalize_rank(rank) for rank in ranks if str(rank).strip()}
-            return tuple(sorted(canonical, key=lambda value: (self._boundary_rank_sort_value(value), value)))
-        if rank_filter == "all":
-            return None
-        return DEFAULT_BOUNDARY_RANKS
-
-    def _normalize_boundary_location_ids(
-        self,
-        *,
-        selected_location_id: str | UUID | None,
-        highlighted_location_ids: tuple[str, ...] | list[str] | None,
-    ) -> tuple[str, ...]:
-        explicit_ids = {
-            str(location_id)
-            for location_id in [selected_location_id, *(highlighted_location_ids or [])]
-            if location_id is not None and str(location_id).strip()
-        }
-        return tuple(sorted(explicit_ids))
-
-    def _resolve_boundary_bbox(
-        self,
-        *,
-        chunk_ids: tuple[str, ...] | list[str] | None,
-        viewport_bucket: str | None,
-        bbox: tuple[float, float, float, float] | None,
-    ) -> tuple[tuple[str, ...], str | None, tuple[float, float, float, float] | None, tuple[tuple[float, float, float, float], ...]]:
-        normalized_chunk_ids = tuple(sorted({parse_boundary_chunk(chunk_id).chunk_id for chunk_id in chunk_ids or ()}))
-        if normalized_chunk_ids and (viewport_bucket or bbox is not None):
-            raise ValueError("chunk_ids cannot be combined with viewport_bucket or bbox")
-        if viewport_bucket and bbox is not None:
-            raise ValueError("viewport_bucket and bbox are mutually exclusive")
-        if normalized_chunk_ids:
-            return (
-                normalized_chunk_ids,
-                None,
-                None,
-                tuple(parse_boundary_chunk(chunk_id).bbox for chunk_id in normalized_chunk_ids),
-            )
-        if viewport_bucket:
-            parsed = parse_viewport_bucket(viewport_bucket)
-            return (), parsed.bucket_id, parsed.bbox, ()
-        return (), None, bbox, ()
 
     def _semantic_city_key(self, row: dict[str, Any]) -> tuple[str, str, str, float, float] | None:
         precision = self._normalize_text(row.get("precision"))
@@ -290,7 +129,7 @@ class PresentationRepository:
             WHERE bl.location_id = %(location_id)s
             LIMIT 1
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"location_id": location_id})
                 row = cur.fetchone()
@@ -326,7 +165,7 @@ class PresentationRepository:
                 AND ROUND(CAST(bl.longitude AS numeric), 5) = ROUND(CAST(%(longitude)s AS numeric), 5)
             ORDER BY bl.location_id ASC
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     sql,
@@ -355,193 +194,36 @@ class PresentationRepository:
             return []
         return [str(row["location_id"]) for row in self._list_semantic_city_peer_rows(location_row)]
 
-    def _geometry_supported(self, geometry: object) -> bool:
-        if not isinstance(geometry, dict):
-            return False
-        return geometry.get("type") in {"Polygon", "MultiPolygon"}
-
-    def _parse_feature_row(self, payload: object) -> dict[str, Any] | None:
-        if isinstance(payload, dict):
-            parsed = payload
-        elif isinstance(payload, (str, bytes, bytearray)):
-            try:
-                parsed = json.loads(payload)
-            except json.JSONDecodeError:
-                return None
-            if not isinstance(parsed, dict):
-                return None
-        else:
-            return None
-        geometry = parsed.get("geometry")
-        if not self._geometry_supported(geometry):
-            return None
-        return parsed
-
-    def _serialize_feature(
+    def get_location_documents(
         self,
-        parsed: dict[str, Any],
+        location_id: Any,
         *,
-        minimal: bool,
-    ) -> dict[str, Any] | None:
-        geometry = parsed.get("geometry")
-        if not isinstance(geometry, dict):
-            return None
-        raw_properties = parsed.get("properties")
-        properties = raw_properties if isinstance(raw_properties, dict) else {}
-        if minimal:
-            return {
-                "type": "Feature",
-                "properties": {
-                    "location_id": properties.get("location_id"),
-                    "location_name": properties.get("location_name"),
-                    "location_rank": properties.get("location_rank"),
-                    "country_name": properties.get("country_name"),
-                    "region_name": properties.get("region_name"),
-                    "aliases": properties.get("aliases"),
-                    "safe_aliases": properties.get("safe_aliases"),
-                    "country_aliases": properties.get("country_aliases"),
-                    "region_aliases": properties.get("region_aliases"),
-                    "match_strategy": properties.get("match_strategy"),
-                },
-                "geometry": {
-                    "type": geometry.get("type"),
-                    "coordinates": geometry.get("coordinates"),
-                },
-            }
-        return {
-            "type": "Feature",
-            "properties": properties,
-            "geometry": {
-                "type": geometry.get("type"),
-                "coordinates": geometry.get("coordinates"),
-            },
-        }
-
-    def get_admin_boundaries_geojson(
-        self,
-        *,
-        minimal: bool = False,
-        rank_filter: RankFilter = "default",
-        ranks: tuple[str, ...] | list[str] | None = None,
-        chunk_ids: tuple[str, ...] | list[str] | None = None,
-        viewport_bucket: str | None = None,
-        bbox: tuple[float, float, float, float] | None = None,
-        selected_location_id: str | UUID | None = None,
-        highlighted_location_ids: tuple[str, ...] | list[str] | None = None,
-    ) -> dict[str, Any]:
-        total_start = time.perf_counter()
-        normalized_ranks = self._normalize_boundary_ranks(ranks, rank_filter=rank_filter)
-        normalized_chunk_ids, normalized_viewport_bucket, resolved_bbox, resolved_chunk_bboxes = self._resolve_boundary_bbox(
-            chunk_ids=chunk_ids,
-            viewport_bucket=viewport_bucket,
-            bbox=bbox,
-        )
-        explicit_location_ids = self._normalize_boundary_location_ids(
-            selected_location_id=selected_location_id,
-            highlighted_location_ids=highlighted_location_ids,
-        )
-
-        params: list[Any] = []
-        rank_sql = ""
-        if normalized_ranks is not None:
-            rank_sql = "location_rank = ANY(%s::text[])"
-            params.append(list(normalized_ranks))
-
-        def append_bbox_clause(bounds: tuple[float, float, float, float]) -> str:
-            west, south, east, north = bounds
-            lat_clause = "(max_lat >= %s AND min_lat <= %s)"
-            params.extend([south, north])
-            if west <= east:
-                lon_clause = "(max_lon >= %s AND min_lon <= %s)"
-                params.extend([west, east])
-            else:
-                lon_clause = "((max_lon >= %s) OR (min_lon <= %s))"
-                params.extend([west, east])
-            return f"({lat_clause} AND {lon_clause})"
-
-        spatial_domains: list[str] = []
-        if resolved_chunk_bboxes:
-            spatial_domains.extend(append_bbox_clause(bounds) for bounds in resolved_chunk_bboxes)
-        elif resolved_bbox is not None:
-            spatial_domains.append(append_bbox_clause(resolved_bbox))
-
-        where_clauses: list[str] = []
-        if spatial_domains:
-            if rank_sql:
-                where_clauses.append(f"({rank_sql} AND ({' OR '.join(spatial_domains)}))")
-            else:
-                where_clauses.append(f"({' OR '.join(spatial_domains)})")
-        elif rank_sql:
-            where_clauses.append(f"({rank_sql})")
-        if explicit_location_ids:
-            where_clauses.append("location_id = ANY(%s::uuid[])")
-            params.append(list(explicit_location_ids))
-
-        where_sql = f"WHERE {' OR '.join(where_clauses)}" if where_clauses else ""
-        sql = f"""
-            SELECT feature_json
-            FROM bi_admin_boundaries
-            {where_sql}
-            ORDER BY
-                CASE location_rank
-                    WHEN 'ocean' THEN 0
-                    WHEN 'continent' THEN 1
-                    WHEN 'country' THEN 2
-                    WHEN 'admin_region' THEN 3
-                    WHEN 'city' THEN 4
-                    WHEN 'national_park' THEN 5
-                    WHEN 'desert' THEN 5
-                    ELSE 99
-                END,
-                location_id ASC
-        """
-        db_start = time.perf_counter()
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-                rows = cur.fetchall()
-        db_elapsed_ms = (time.perf_counter() - db_start) * 1000.0
-        transform_start = time.perf_counter()
-        features: list[dict[str, Any]] = []
-        seen_location_ids: set[str] = set()
-        for row in rows:
-            parsed = self._parse_feature_row(row[0] if row else None)
-            if parsed is None:
-                continue
-            properties = parsed.get("properties")
-            if not isinstance(properties, dict):
-                continue
-            location_id = str(properties.get("location_id") or "").strip()
-            if location_id:
-                if location_id in seen_location_ids:
-                    continue
-                seen_location_ids.add(location_id)
-            serialized = self._serialize_feature(
-                parsed,
-                minimal=minimal,
+        limit: int,
+        offset: int,
+    ) -> LocationDocumentsResult:
+        """Resolve a location and fetch its page using one checked-out connection."""
+        with self._connect() as conn:
+            repo = PresentationRepository(lambda: nullcontext(conn))
+            resolved = repo.resolve_location_for_documents(location_id)
+            if resolved is None:
+                return LocationDocumentsResult(resolved=None, location_display=None, scoped=None)
+            resolved_uuid = UUID(resolved.location_id)
+            semantic_ids = repo.get_semantic_scope_location_ids(
+                resolved_uuid,
+                scope_rank=resolved.location_rank,
             )
-            if serialized is None:
-                continue
-            features.append(serialized)
-        total_elapsed_ms = (time.perf_counter() - total_start) * 1000.0
-        transform_elapsed_ms = (time.perf_counter() - transform_start) * 1000.0
-        logger.info(
-            "presentation.boundaries_repo_fetch minimal=%s rank_filter=%s ranks=%s bbox=%s explicit_ids=%s rows=%s features=%s db_ms=%.2f transform_ms=%.2f total_ms=%.2f",
-            minimal,
-            rank_filter,
-            normalized_ranks,
-            normalized_chunk_ids or normalized_viewport_bucket or resolved_bbox,
-            len(explicit_location_ids),
-            len(rows),
-            len(features),
-            db_elapsed_ms,
-            transform_elapsed_ms,
-            total_elapsed_ms,
-        )
-        return {
-            "type": "FeatureCollection",
-            "features": features,
-        }
+            scoped = repo.list_location_documents(
+                resolved_uuid,
+                scope_rank=resolved.location_rank,
+                limit=limit,
+                offset=offset,
+                semantic_scope_location_ids=semantic_ids,
+            )
+            return LocationDocumentsResult(
+                resolved=resolved,
+                location_display=repo.get_location_name(resolved_uuid),
+                scoped=scoped,
+            )
 
     def list_locations(self) -> list[dict[str, Any]]:
         start = time.perf_counter()
@@ -565,7 +247,7 @@ class PresentationRepository:
                 AND bl.longitude BETWEEN -180 AND 180
             ORDER BY bl.document_count DESC, bl.normalized_location ASC, bl.location_id ASC
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql)
                 columns = [d[0] for d in cur.description]
@@ -685,7 +367,7 @@ class PresentationRepository:
             FROM ordered o
             WHERE o.rn = 1
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"location_id": location_id})
                 row = cur.fetchone()
@@ -714,7 +396,7 @@ class PresentationRepository:
             WHERE bl.location_id = %(location_id)s
             LIMIT 1
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"location_id": location_id})
                 row = cur.fetchone()
@@ -803,10 +485,15 @@ class PresentationRepository:
                     WHEN bd.latest_snapshot_id IS NOT NULL THEN '/api/map/document/' || bd.document_id || '/pdf'
                     ELSE NULL
                 END AS pdf_url,
+                CASE
+                    WHEN ds.pdf_thumbnail_webp IS NOT NULL THEN '/api/map/document/' || bd.document_id || '/thumbnail'
+                    ELSE NULL
+                END AS thumbnail_url,
                 dc.total_items,
                 sc.location_count
             FROM page_docs pd
             JOIN bi_documents bd ON bd.document_id = pd.document_id
+            LEFT JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
             CROSS JOIN doc_counts dc
             CROSS JOIN scope_counts sc
             ORDER BY
@@ -815,7 +502,7 @@ class PresentationRepository:
                 bd.url ASC,
                 bd.document_id ASC
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(scope_sql, [*base_params, limit, offset])
                 columns = [d[0] for d in cur.description]
@@ -859,6 +546,7 @@ class PresentationRepository:
                 "canonical_scp_id": row["canonical_scp_id"],
                 "scp_url": row["scp_url"],
                 "pdf_url": row["pdf_url"],
+                "thumbnail_url": row["thumbnail_url"],
             }
             for row in rows
         ]
@@ -905,7 +593,7 @@ class PresentationRepository:
                 AND bl.longitude BETWEEN -180 AND 180
             ORDER BY bdl.mention_count DESC, bl.normalized_location ASC, bl.location_id ASC
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"document_id": document_id})
                 columns = [d[0] for d in cur.description]
@@ -935,7 +623,7 @@ class PresentationRepository:
                 AND bl.longitude BETWEEN -180 AND 180
             ORDER BY bl.document_count DESC, bl.location_id ASC
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql)
                 columns = [d[0] for d in cur.description]
@@ -964,15 +652,20 @@ class PresentationRepository:
                 CASE
                     WHEN bd.latest_snapshot_id IS NOT NULL THEN '/api/map/document/' || bd.document_id || '/pdf'
                     ELSE NULL
-                END AS pdf_url
+                END AS pdf_url,
+                CASE
+                    WHEN ds.pdf_thumbnail_webp IS NOT NULL THEN '/api/map/document/' || bd.document_id || '/thumbnail'
+                    ELSE NULL
+                END AS thumbnail_url
             FROM bi_documents bd
+            LEFT JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
             LEFT JOIN top_location tl
                 ON tl.document_id = bd.document_id
                 AND tl.rn = 1
             WHERE bd.document_id = %(document_id)s
             LIMIT 1
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"document_id": document_id})
                 row = cur.fetchone()
@@ -990,13 +683,62 @@ class PresentationRepository:
               AND ds.pdf_blob IS NOT NULL
             LIMIT 1
         """
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {"document_id": document_id})
                 row = cur.fetchone()
         if row is None:
             return None
         return bytes(row[0])
+
+    def get_document_thumbnail(self, document_id: UUID) -> bytes | None:
+        sql = """
+            SELECT ds.pdf_thumbnail_webp
+            FROM bi_documents bd
+            JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
+            WHERE bd.document_id = %(document_id)s
+              AND ds.pdf_thumbnail_webp IS NOT NULL
+            LIMIT 1
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, {"document_id": document_id})
+                row = cur.fetchone()
+        return bytes(row[0]) if row is not None else None
+
+    def get_document_pdf_size(self, document_id: UUID) -> int | None:
+        sql = """
+            SELECT OCTET_LENGTH(ds.pdf_blob)
+            FROM bi_documents bd
+            JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
+            WHERE bd.document_id = %(document_id)s
+              AND ds.pdf_blob IS NOT NULL
+            LIMIT 1
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, {"document_id": document_id})
+                row = cur.fetchone()
+        return int(row[0]) if row is not None else None
+
+    def get_document_pdf_range(self, document_id: UUID, *, start: int, length: int) -> bytes | None:
+        """Read only the requested bytea slice; PostgreSQL need not send the full PDF."""
+        sql = """
+            SELECT SUBSTRING(ds.pdf_blob FROM %(sql_start)s FOR %(length)s)
+            FROM bi_documents bd
+            JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
+            WHERE bd.document_id = %(document_id)s
+              AND ds.pdf_blob IS NOT NULL
+            LIMIT 1
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    {"document_id": document_id, "sql_start": start + 1, "length": length},
+                )
+                row = cur.fetchone()
+        return bytes(row[0]) if row is not None else None
 
     def search(self, query: str, limit: int) -> dict[str, list[dict[str, Any]]]:
         start = time.perf_counter()
@@ -1040,6 +782,10 @@ class PresentationRepository:
                         ELSE NULL
                     END AS pdf_url,
                     CASE
+                        WHEN ds.pdf_thumbnail_webp IS NOT NULL THEN '/api/map/document/' || bd.document_id || '/thumbnail'
+                        ELSE NULL
+                    END AS thumbnail_url,
+                    CASE
                         WHEN LOWER(bd.canonical_number) = %(canonical_exact)s THEN 0
                         WHEN %(numeric_only)s::text IS NOT NULL
                             AND REPLACE(LOWER(bd.canonical_number), 'scp-', '') = %(numeric_only)s::text THEN 1
@@ -1052,6 +798,7 @@ class PresentationRepository:
                         ELSE 9
                     END AS rank_bucket
                 FROM bi_documents bd
+                LEFT JOIN document_snapshots ds ON ds.id = bd.latest_snapshot_id
                 LEFT JOIN top_location tl ON tl.document_id = bd.document_id AND tl.rn = 1
                 WHERE
                     LOWER(bd.canonical_number) = %(canonical_exact)s
@@ -1075,6 +822,7 @@ class PresentationRepository:
                 dm.scp_url,
                 dm.location_display,
                 dm.pdf_url,
+                dm.thumbnail_url,
                 dm.rank_bucket
             FROM document_matches dm
             ORDER BY
@@ -1148,7 +896,7 @@ class PresentationRepository:
             "numeric_prefix": numeric_prefix,
             "limit": limit,
         }
-        with get_connection() as conn:
+        with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(document_sql, params)
                 doc_columns = [d[0] for d in cur.description]

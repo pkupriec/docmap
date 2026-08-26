@@ -9,6 +9,8 @@ import unicodedata
 
 from psycopg import Connection
 
+from services.geocoder.identity import location_identity_key
+
 logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
@@ -470,14 +472,26 @@ def get_geo_location_cache_entry(conn: Connection, normalized_location: str) -> 
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, location_rank, osm_type, osm_id, osm_boundingbox
-                 , canonical_id, geocode_candidates, boundary_intent
-            FROM geo_locations
-            WHERE normalized_location = %s
+            SELECT gl.id, gl.location_rank, gl.osm_type, gl.osm_id, gl.osm_boundingbox,
+                   gl.canonical_id, gl.geocode_candidates, gl.boundary_intent
+            FROM geo_location_aliases a
+            JOIN geo_locations gl ON gl.id = a.location_id
+            WHERE a.normalized_location = %s
             """,
             (normalized_location,),
         )
         row = cur.fetchone()
+        if not row:
+            cur.execute(
+                """
+                SELECT id, location_rank, osm_type, osm_id, osm_boundingbox,
+                       canonical_id, geocode_candidates, boundary_intent
+                FROM geo_locations
+                WHERE normalized_location = %s
+                """,
+                (normalized_location,),
+            )
+            row = cur.fetchone()
         if not row:
             return None
         osm_id_raw = row[3]
@@ -497,6 +511,85 @@ def get_geo_location_cache_entry(conn: Connection, normalized_location: str) -> 
 def get_geo_location_id_by_normalized_name(conn: Connection, normalized_location: str) -> str | None:
     entry = get_geo_location_cache_entry(conn, normalized_location)
     return entry.location_id if entry else None
+
+
+def consolidate_location_identities(conn: Connection) -> dict[str, int]:
+    """Backfill entity keys and redirect raw links without mutating analytics-owned tables."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                gl.id, gl.normalized_location, gl.country, gl.region, gl.latitude, gl.longitude,
+                gl.precision, gl.location_rank, gl.osm_type, gl.osm_id, gl.canonical_id,
+                gl.identity_key, COUNT(dl.id) AS link_count
+            FROM geo_locations gl
+            LEFT JOIN document_locations dl ON dl.location_id = gl.id
+            GROUP BY gl.id
+            ORDER BY gl.id
+            """
+        )
+        rows = cur.fetchall()
+
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            item = {
+                "id": str(row[0]),
+                "normalized_location": row[1],
+                "country": row[2],
+                "region": row[3],
+                "latitude": row[4],
+                "longitude": row[5],
+                "precision": row[6],
+                "location_rank": row[7],
+                "osm_type": row[8],
+                "osm_id": row[9],
+                "canonical_id": row[10],
+                "identity_key": row[11],
+                "link_count": int(row[12] or 0),
+            }
+            key = location_identity_key(item)
+            if key:
+                groups.setdefault(key, []).append(item)
+
+        redirected_links = 0
+        duplicate_entities = 0
+        for key, members in groups.items():
+            members.sort(
+                key=lambda item: (
+                    0 if item["identity_key"] == key else 1,
+                    0 if item["osm_type"] and item["osm_id"] is not None else 1,
+                    0 if item["canonical_id"] else 1,
+                    -int(item["link_count"]),
+                    len(str(item["normalized_location"] or "")),
+                    str(item["id"]),
+                )
+            )
+            winner = members[0]
+            cur.execute("UPDATE geo_locations SET identity_key = %s WHERE id = %s", (key, winner["id"]))
+            for member in members:
+                _save_location_alias(
+                    cur,
+                    normalized_location=str(member["normalized_location"]),
+                    location_id=str(winner["id"]),
+                )
+            loser_ids = [str(item["id"]) for item in members[1:]]
+            if loser_ids:
+                cur.execute(
+                    """
+                    UPDATE document_locations
+                    SET location_id = %s
+                    WHERE location_id = ANY(%s::uuid[])
+                    """,
+                    (winner["id"], loser_ids),
+                )
+                redirected_links += int(cur.rowcount or 0)
+                duplicate_entities += len(loser_ids)
+
+    return {
+        "identity_count": len(groups),
+        "duplicate_entities": duplicate_entities,
+        "redirected_links": redirected_links,
+    }
 
 
 def _geo_location_payload(location: dict[str, Any]) -> dict[str, Any]:
@@ -547,9 +640,22 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
     )
     osm_type = payload.get("osm_type")
     osm_id = payload.get("osm_id")
+    identity_key = location_identity_key(payload)
 
     with conn.cursor() as cur:
-        if osm_type and osm_id is not None:
+        existing = None
+        if identity_key:
+            cur.execute(
+                """
+                SELECT id
+                FROM geo_locations
+                WHERE identity_key = %s
+                LIMIT 1
+                """,
+                (identity_key,),
+            )
+            existing = cur.fetchone()
+        if existing is None and osm_type and osm_id is not None:
             cur.execute(
                 """
                 SELECT id
@@ -561,8 +667,8 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                 (osm_type, osm_id),
             )
             existing = cur.fetchone()
-            if existing:
-                cur.execute(
+        if existing:
+            cur.execute(
                     """
                     UPDATE geo_locations
                     SET
@@ -573,6 +679,8 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                         longitude = %s,
                         precision = %s,
                         location_rank = %s,
+                        osm_type = %s,
+                        osm_id = %s,
                         osm_category = %s,
                         osm_place_type = %s,
                         osm_addresstype = %s,
@@ -585,6 +693,7 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                         canonical_resolution_method = %s,
                         canonical_confidence = %s,
                         canonical_resolution_details = %s::jsonb,
+                        identity_key = %s,
                         geom = ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
                     WHERE id = %s
                     RETURNING id
@@ -597,6 +706,8 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                         payload["longitude"],
                         payload["precision"],
                         payload["location_rank"],
+                        payload["osm_type"],
+                        payload["osm_id"],
                         payload["osm_category"],
                         payload["osm_place_type"],
                         payload["osm_addresstype"],
@@ -609,12 +720,15 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                         payload["canonical_resolution_method"],
                         payload["canonical_confidence"],
                         payload["canonical_resolution_details_json"],
+                        identity_key,
                         payload["longitude"],
                         payload["latitude"],
                         existing[0],
                     ),
                 )
-                return str(cur.fetchone()[0])
+            location_id = str(cur.fetchone()[0])
+            _save_location_alias(cur, normalized_location=payload["normalized_location"], location_id=location_id)
+            return location_id
 
         cur.execute(
             """
@@ -642,11 +756,12 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                     canonical_resolution_method,
                     canonical_confidence,
                     canonical_resolution_details,
+                    identity_key,
                     geom
                 )
             VALUES
                 (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s, %s, %s, %s::jsonb,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
                 )
             ON CONFLICT (normalized_location) DO UPDATE
@@ -671,6 +786,7 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                 canonical_resolution_method = EXCLUDED.canonical_resolution_method,
                 canonical_confidence = EXCLUDED.canonical_confidence,
                 canonical_resolution_details = EXCLUDED.canonical_resolution_details,
+                identity_key = EXCLUDED.identity_key,
                 geom = EXCLUDED.geom
             RETURNING id
             """,
@@ -697,11 +813,26 @@ def save_geo_location(conn: Connection, location: dict[str, Any]) -> str:
                 payload["canonical_resolution_method"],
                 payload["canonical_confidence"],
                 payload["canonical_resolution_details_json"],
+                identity_key,
                 payload["longitude"],
                 payload["latitude"],
             ),
         )
-        return str(cur.fetchone()[0])
+        location_id = str(cur.fetchone()[0])
+        _save_location_alias(cur, normalized_location=payload["normalized_location"], location_id=location_id)
+        return location_id
+
+
+def _save_location_alias(cur, *, normalized_location: str, location_id: str) -> None:
+    cur.execute(
+        """
+        INSERT INTO geo_location_aliases (normalized_location, location_id)
+        VALUES (%s, %s)
+        ON CONFLICT (normalized_location) DO UPDATE
+        SET location_id = EXCLUDED.location_id
+        """,
+        (normalized_location, location_id),
+    )
 
 
 def link_document_location(conn: Connection, *, document_id: str, location_id: str, mention_id: str) -> str:

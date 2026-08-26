@@ -46,14 +46,14 @@ services:
       PYTHONUNBUFFERED: "1"
       DB_RESET_ON_START: "0"
       DB_DROP_TABLES_ON_START: "0"
-      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
-      BIGQUERY_DATASET: ${BIGQUERY_DATASET:-}
-      BIGQUERY_LOCATION: ${BIGQUERY_LOCATION:-}
-      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      DOCMAP_PRESENTATION_ARTIFACT_ROOT: /data/presentation_geometry
+      DOCMAP_PRESENTATION_MAX_ARCHIVE_BYTES: ${DOCMAP_PRESENTATION_MAX_ARCHIVE_BYTES:-536870912}
+      DOCMAP_PRESENTATION_ARTIFACT_RETENTION: ${DOCMAP_PRESENTATION_ARTIFACT_RETENTION:-2}
+      TIPPECANOE_BIN: /usr/local/bin/tippecanoe
 
     volumes:
       - ..:/app
-      - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+      - presentation_geometry:/data/presentation_geometry
 
     working_dir: /app
 
@@ -70,7 +70,7 @@ services:
     working_dir: /ui
     volumes:
       - ..:/app
-    command: sh -c "cd /app/ui && npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    command: sh -c "cd /app/ui && npm ci && npm run dev -- --host 0.0.0.0 --port 5173"
     ports:
       - "5173:5173"
 
@@ -88,6 +88,9 @@ services:
       PYTHONUNBUFFERED: "1"
       DB_RESET_ON_START: "0"
       DB_DROP_TABLES_ON_START: "0"
+      DOCMAP_PRESENTATION_ARTIFACT_ROOT: /data/presentation_geometry
+    volumes:
+      - presentation_geometry:/data/presentation_geometry:ro
     ports:
       - "8080:8080"
 
@@ -103,7 +106,7 @@ services:
       PYTHONUNBUFFERED: "1"
       CANONICAL_DICTIONARY_INPUT: ${CANONICAL_DICTIONARY_INPUT:-/app/services/geocoder/assets/canonical_dictionary.json}
       CANONICAL_DICTIONARY_SOURCE: ${CANONICAL_DICTIONARY_SOURCE:-wof}
-      CANONICAL_REFRESH_REPORT_PATH: ${CANONICAL_REFRESH_REPORT_PATH:-/app/docs/qa/canonical_dictionary_refresh_report.json}
+      CANONICAL_REFRESH_REPORT_PATH: ${CANONICAL_REFRESH_REPORT_PATH:-/app/data/canonical_dictionary_refresh_report.json}
     volumes:
       - ..:/app
     working_dir: /app
@@ -133,3 +136,4 @@ services:
 volumes:
   postgres_data:
   pgadmin_data:
+  presentation_geometry:

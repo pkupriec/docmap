@@ -19,6 +19,7 @@ __pycache__
 *.pyo
 *.pyd
 *.log
+*.egg-info
 
 .venv
 venv

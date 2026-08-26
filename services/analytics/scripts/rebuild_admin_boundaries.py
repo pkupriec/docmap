@@ -45,7 +45,7 @@ def main() -> int:
                 "coverage_path": str(result.coverage_path),
                 "baked_geometry_version": baked_result.version,
                 "baked_geometry_manifest_path": str(baked_result.manifest_path),
-                "baked_geometry_total_tiles": baked_result.total_tiles,
+                "baked_geometry_total_archives": baked_result.total_archives,
             },
             ensure_ascii=False,
         )

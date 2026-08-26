@@ -21,6 +21,7 @@ class DocumentCard(BaseModel):
     scp_url: str
     location_display: str | None = None
     pdf_url: str | None = None
+    thumbnail_url: str | None = None
 
 
 class LocationDocumentsResponse(BaseModel):

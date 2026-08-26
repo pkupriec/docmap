@@ -1,30 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import maplibregl from "maplibre-gl";
-import { MapboxOverlay } from "@deck.gl/mapbox";
-import { GeoJsonLayer, ScatterplotLayer } from "@deck.gl/layers";
-import type { PickingInfo } from "@deck.gl/core";
+import { Protocol } from "pmtiles";
 
-import type { BoundaryCollection, Location, LocationRank, MapViewport, ScreenPoint } from "./types";
+import type { BoundaryCollection, Location, MapViewport, ScreenPoint } from "./types";
 
-type FocusCoordinate = {
-  latitude: number;
-  longitude: number;
-};
-
-type BakedStatus = "waiting_viewport" | "loading" | "ready" | "error";
-
-type PointRecord = {
-  locationId: string;
-  rank: LocationRank;
-  longitude: number;
-  latitude: number;
-  documentCount: number;
-};
+type FocusCoordinate = { latitude: number; longitude: number };
+type BakedStatus = "loading" | "ready" | "error";
 
 type Props = {
   locations: Location[];
   explicitBoundaries: BoundaryCollection;
-  bakedTileUrlTemplate: string | null;
+  bakedArchiveUrl: string | null;
+  bakedZoomMin: number;
+  bakedZoomMax: number;
   selectedLocationId: string | null;
   highlightedLocationIds: string[];
   onHoverLocation: (locationId: string | null) => void;
@@ -36,77 +24,152 @@ type Props = {
   focusCoordinates: FocusCoordinate[];
 };
 
-const INITIAL_VIEW_STATE = {
-  longitude: 12,
-  latitude: 34,
-  zoom: 1.4,
+const INITIAL_VIEW = { longitude: 12, latitude: 34, zoom: 1.4 };
+const BASE_STYLE: maplibregl.StyleSpecification = {
+  version: 8,
+  sources: {
+    "openstreetmap-base": {
+      type: "raster",
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      attribution: "© OpenStreetMap contributors",
+    },
+  },
+  layers: [
+    { id: "background", type: "background", paint: { "background-color": "#dce9ef" } },
+    { id: "openstreetmap-base", type: "raster", source: "openstreetmap-base", paint: { "raster-opacity": 0.72 } },
+  ],
 };
+const BAKED_SOURCE = "baked-boundaries";
+const BAKED_LAYERS = {
+  fill: "baked-boundaries-fill",
+  line: "baked-boundaries-line",
+  highlighted: "baked-boundaries-highlighted",
+  selected: "baked-boundaries-selected",
+} as const;
+const EXPLICIT_SOURCE = "explicit-boundaries";
+const EXPLICIT_LAYERS = { fill: "explicit-boundaries-fill", line: "explicit-boundaries-line" } as const;
+const POINT_SOURCE = "location-points";
+const POINT_LAYERS = {
+  base: "location-points-base",
+  highlighted: "location-points-highlighted",
+  selected: "location-points-selected",
+} as const;
 
-const BAKED_SOURCE_ID = "baked-boundaries-source";
-const BAKED_LAYER_FILL_ID = "baked-boundaries-fill";
-const BAKED_LAYER_LINE_ID = "baked-boundaries-line";
-const BAKED_LAYER_HIGHLIGHT_ID = "baked-boundaries-highlight";
-const BAKED_LAYER_SELECTED_ID = "baked-boundaries-selected";
+const protocol = new Protocol();
+maplibregl.addProtocol("pmtiles", protocol.tile);
 
 function isFiniteCoordinate(latitude: number, longitude: number): boolean {
-  return (
-    Number.isFinite(latitude) &&
-    Number.isFinite(longitude) &&
-    latitude >= -90 &&
-    latitude <= 90 &&
-    longitude >= -180 &&
-    longitude <= 180
-  );
-}
-
-function normalizeLocationRank(location: Location): LocationRank {
-  const rawRank = (location.location_rank ?? "").toLowerCase();
-  const precision = (location.precision ?? "").toLowerCase();
-  if (precision.includes("country")) {
-    return "country";
-  }
-  if (precision.includes("region") || precision.includes("state") || precision.includes("province")) {
-    return "admin_region";
-  }
-  if (precision.includes("city")) {
-    return "city";
-  }
-  const adminLevelMatch = rawRank.match(/^admin_level_(\d+)$/);
-  if (adminLevelMatch) {
-    const adminLevel = Number(adminLevelMatch[1]);
-    if (Number.isFinite(adminLevel)) {
-      if (adminLevel <= 2) {
-        return "country";
-      }
-      return "admin_region";
-    }
-  }
-  if (rawRank === "region") {
-    return "admin_region";
-  }
-  if (
-    rawRank === "city" ||
-    rawRank === "admin_region" ||
-    rawRank === "country" ||
-    rawRank === "continent" ||
-    rawRank === "ocean" ||
-    rawRank === "national_park" ||
-    rawRank === "desert" ||
-    rawRank === "unknown"
-  ) {
-    return rawRank;
-  }
-  return "unknown";
+  return Number.isFinite(latitude) && Number.isFinite(longitude)
+    && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
 }
 
 function getViewport(map: maplibregl.Map): MapViewport {
   const bounds = map.getBounds();
   return {
-    zoom: map.getZoom(),
-    west: bounds.getWest(),
-    east: bounds.getEast(),
-    south: bounds.getSouth(),
-    north: bounds.getNorth(),
+    zoom: map.getZoom(), west: bounds.getWest(), east: bounds.getEast(),
+    south: bounds.getSouth(), north: bounds.getNorth(),
+  };
+}
+
+function emptyFilter(): maplibregl.FilterSpecification {
+  return ["==", ["get", "location_id"], "__none__"];
+}
+
+function idsFilter(ids: string[]): maplibregl.FilterSpecification {
+  return ids.length > 0 ? ["in", ["get", "location_id"], ["literal", ids]] : emptyFilter();
+}
+
+function idFilter(id: string | null): maplibregl.FilterSpecification {
+  return id ? ["==", ["get", "location_id"], id] : emptyFilter();
+}
+
+function removeBakedSource(map: maplibregl.Map): void {
+  Object.values(BAKED_LAYERS).forEach((id) => {
+    if (map.getLayer(id)) map.removeLayer(id);
+  });
+  if (map.getSource(BAKED_SOURCE)) map.removeSource(BAKED_SOURCE);
+}
+
+function addBakedSource(map: maplibregl.Map, archiveUrl: string, zoomMin: number, zoomMax: number): void {
+  removeBakedSource(map);
+  map.addSource(BAKED_SOURCE, { type: "vector", url: archiveUrl, minzoom: zoomMin, maxzoom: zoomMax });
+  map.addLayer({
+    id: BAKED_LAYERS.fill, type: "fill", source: BAKED_SOURCE, "source-layer": "boundaries",
+    paint: { "fill-color": "#2c7ac0", "fill-opacity": 0.22 },
+  });
+  map.addLayer({
+    id: BAKED_LAYERS.line, type: "line", source: BAKED_SOURCE, "source-layer": "boundaries",
+    paint: { "line-color": "#2c608c", "line-width": 1.2, "line-opacity": 0.6 },
+  });
+  map.addLayer({
+    id: BAKED_LAYERS.highlighted, type: "fill", source: BAKED_SOURCE, "source-layer": "boundaries",
+    filter: emptyFilter(), paint: { "fill-color": "#f5bf2f", "fill-opacity": 0.4 },
+  });
+  map.addLayer({
+    id: BAKED_LAYERS.selected, type: "fill", source: BAKED_SOURCE, "source-layer": "boundaries",
+    filter: emptyFilter(), paint: { "fill-color": "#d8462d", "fill-opacity": 0.48 },
+  });
+}
+
+function setGeoJsonSource(map: maplibregl.Map, id: string, data: GeoJSON.FeatureCollection): boolean {
+  const source = map.getSource(id) as maplibregl.GeoJSONSource | undefined;
+  if (source) {
+    source.setData(data);
+    return false;
+  }
+  map.addSource(id, { type: "geojson", data });
+  return true;
+}
+
+function addExplicitLayers(map: maplibregl.Map): void {
+  map.addLayer({
+    id: EXPLICIT_LAYERS.fill, type: "fill", source: EXPLICIT_SOURCE,
+    paint: { "fill-color": "#f7d354", "fill-opacity": 0.08 },
+  });
+  map.addLayer({
+    id: EXPLICIT_LAYERS.line, type: "line", source: EXPLICIT_SOURCE,
+    paint: { "line-color": "#ffffff", "line-width": 3, "line-opacity": 0.96 },
+  });
+}
+
+function addPointLayers(map: maplibregl.Map): void {
+  map.addLayer({
+    id: POINT_LAYERS.base, type: "circle", source: POINT_SOURCE,
+    paint: {
+      "circle-radius": ["min", 16, ["+", 4, ["*", ["get", "document_count"], 0.42]]],
+      "circle-color": ["case", ["==", ["get", "location_rank"], "city"], "#1c5ccd", "#609dd6"],
+      "circle-opacity": 0.84, "circle-stroke-color": "rgba(20, 32, 53, 0.72)", "circle-stroke-width": 1.5,
+    },
+  });
+  map.addLayer({
+    id: POINT_LAYERS.highlighted, type: "circle", source: POINT_SOURCE, filter: emptyFilter(),
+    paint: {
+      "circle-radius": 14, "circle-opacity": 0, "circle-stroke-color": "#fad241",
+      "circle-stroke-opacity": 0.9, "circle-stroke-width": 3,
+    },
+  });
+  map.addLayer({
+    id: POINT_LAYERS.selected, type: "circle", source: POINT_SOURCE, filter: emptyFilter(),
+    paint: {
+      "circle-radius": 9, "circle-color": "#d8462d", "circle-opacity": 0.96,
+      "circle-stroke-color": "#ffffff", "circle-stroke-width": 2,
+    },
+  });
+}
+
+function makePointCollection(locations: Location[]): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: locations.filter((item) => isFiniteCoordinate(item.latitude, item.longitude)).map((item) => ({
+      type: "Feature",
+      properties: {
+        location_id: item.location_id,
+        location_rank: item.location_rank ?? "unknown",
+        document_count: item.document_count,
+      },
+      geometry: { type: "Point", coordinates: [item.longitude, item.latitude] },
+    })),
   };
 }
 
@@ -114,44 +177,31 @@ class ZoomLevelControl implements maplibregl.IControl {
   private map: maplibregl.Map | null = null;
   private container: HTMLDivElement | null = null;
   private label: HTMLButtonElement | null = null;
-
-  private updateLabel = (): void => {
-    if (!this.map || !this.label) {
-      return;
-    }
-    this.label.textContent = `Zoom ${this.map.getZoom().toFixed(1)}`;
+  private update = (): void => {
+    if (this.map && this.label) this.label.textContent = `Zoom ${this.map.getZoom().toFixed(1)}`;
   };
 
   onAdd(map: maplibregl.Map): HTMLElement {
     this.map = map;
-    const container = document.createElement("div");
-    container.className = "maplibregl-ctrl maplibregl-ctrl-group";
-
-    const label = document.createElement("button");
-    label.type = "button";
-    label.disabled = true;
-    label.title = "Current zoom level";
-    label.setAttribute("aria-label", "Current zoom level");
-    label.style.width = "auto";
-    label.style.minWidth = "84px";
-    label.style.padding = "0 10px";
-    label.style.font = "12px/29px sans-serif";
-    label.style.color = "#111827";
-    label.style.opacity = "1";
-    label.style.cursor = "default";
-
-    container.appendChild(label);
-    this.container = container;
-    this.label = label;
-    this.updateLabel();
-    map.on("zoom", this.updateLabel);
-    return container;
+    this.container = document.createElement("div");
+    this.container.className = "maplibregl-ctrl maplibregl-ctrl-group";
+    this.label = document.createElement("button");
+    this.label.type = "button";
+    this.label.disabled = true;
+    this.label.title = "Current zoom level";
+    this.label.setAttribute("aria-label", "Current zoom level");
+    Object.assign(this.label.style, {
+      width: "auto", minWidth: "84px", padding: "0 10px", font: "12px/29px sans-serif",
+      color: "#111827", opacity: "1", cursor: "default",
+    });
+    this.container.appendChild(this.label);
+    map.on("zoom", this.update);
+    this.update();
+    return this.container;
   }
 
   onRemove(): void {
-    if (this.map) {
-      this.map.off("zoom", this.updateLabel);
-    }
+    this.map?.off("zoom", this.update);
     this.container?.remove();
     this.map = null;
     this.container = null;
@@ -159,450 +209,195 @@ class ZoomLevelControl implements maplibregl.IControl {
   }
 }
 
-function _emptyFilter() {
-  return ["==", ["get", "location_id"], "__none__"] as maplibregl.FilterSpecification;
-}
-
-function _inFilter(ids: string[]) {
-  if (ids.length === 0) {
-    return _emptyFilter();
-  }
-  return ["in", ["get", "location_id"], ["literal", ids]] as maplibregl.FilterSpecification;
-}
-
-function _selectedFilter(id: string | null) {
-  if (!id) {
-    return _emptyFilter();
-  }
-  return ["==", ["get", "location_id"], id] as maplibregl.FilterSpecification;
-}
-
-export function MapView({
-  locations,
-  explicitBoundaries,
-  bakedTileUrlTemplate,
-  selectedLocationId,
-  highlightedLocationIds,
-  onHoverLocation,
-  onClickLocation,
-  onEmptyMapClick,
-  onViewportChange,
-  onProjectorChange,
-  onBakedStatusChange,
-  focusCoordinates,
-}: Props) {
+export function MapView(props: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const overlayRef = useRef<MapboxOverlay | null>(null);
-  const lastDeckClickTsRef = useRef(0);
-  const lastBakedClickTsRef = useRef(0);
-  const lastFocusKeyRef = useRef<string>("");
+  const propsRef = useRef(props);
   const viewportFrameRef = useRef<number | null>(null);
   const pulseTimerRef = useRef<number | null>(null);
-  const bakedSourceLoadedRef = useRef(false);
-  const [pulsePhase, setPulsePhase] = useState(0);
+  const hoveredIdRef = useRef<string | null>(null);
+  const bakedGenerationRef = useRef(0);
+  const lastFocusKeyRef = useRef("");
+  const styleReadyRef = useRef(false);
+  propsRef.current = props;
 
-  const pointRecords = useMemo<PointRecord[]>(
-    () =>
-      locations
-        .filter((location) => isFiniteCoordinate(location.latitude, location.longitude))
-        .map((location) => ({
-          locationId: location.location_id,
-          rank: normalizeLocationRank(location),
-          latitude: location.latitude,
-          longitude: location.longitude,
-          documentCount: location.document_count,
-        })),
-    [locations],
-  );
-
-  const highlightedPoints = useMemo(
-    () =>
-      pointRecords
-        .filter((item) => highlightedLocationIds.includes(item.locationId))
-        .map((item) => ({
-          longitude: item.longitude,
-          latitude: item.latitude,
-          locationId: item.locationId,
-        })),
-    [highlightedLocationIds, pointRecords],
-  );
-
-  const upsertBakedSource = useCallback((map: maplibregl.Map, template: string) => {
-    if (map.getLayer(BAKED_LAYER_SELECTED_ID)) {
-      map.removeLayer(BAKED_LAYER_SELECTED_ID);
-    }
-    if (map.getLayer(BAKED_LAYER_HIGHLIGHT_ID)) {
-      map.removeLayer(BAKED_LAYER_HIGHLIGHT_ID);
-    }
-    if (map.getLayer(BAKED_LAYER_LINE_ID)) {
-      map.removeLayer(BAKED_LAYER_LINE_ID);
-    }
-    if (map.getLayer(BAKED_LAYER_FILL_ID)) {
-      map.removeLayer(BAKED_LAYER_FILL_ID);
-    }
-    if (map.getSource(BAKED_SOURCE_ID)) {
-      map.removeSource(BAKED_SOURCE_ID);
-    }
-
-    map.addSource(BAKED_SOURCE_ID, {
-      type: "vector",
-      tiles: [template],
-      minzoom: 0,
-      maxzoom: 8,
-    });
-    map.addLayer({
-      id: BAKED_LAYER_FILL_ID,
-      type: "fill",
-      source: BAKED_SOURCE_ID,
-      "source-layer": "boundaries",
-      paint: {
-        "fill-color": "#2c7ac0",
-        "fill-opacity": 0.22,
-      },
-    });
-    map.addLayer({
-      id: BAKED_LAYER_LINE_ID,
-      type: "line",
-      source: BAKED_SOURCE_ID,
-      "source-layer": "boundaries",
-      paint: {
-        "line-color": "#2c608c",
-        "line-width": 1.2,
-        "line-opacity": 0.6,
-      },
-    });
-    map.addLayer({
-      id: BAKED_LAYER_HIGHLIGHT_ID,
-      type: "fill",
-      source: BAKED_SOURCE_ID,
-      "source-layer": "boundaries",
-      filter: _emptyFilter(),
-      paint: {
-        "fill-color": "#f5bf2f",
-        "fill-opacity": 0.4,
-      },
-    });
-    map.addLayer({
-      id: BAKED_LAYER_SELECTED_ID,
-      type: "fill",
-      source: BAKED_SOURCE_ID,
-      "source-layer": "boundaries",
-      filter: _emptyFilter(),
-      paint: {
-        "fill-color": "#d8462d",
-        "fill-opacity": 0.48,
-      },
-    });
-  }, []);
+  const pointCollection = useMemo(() => makePointCollection(props.locations), [props.locations]);
 
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) {
-      return;
-    }
+    if (!containerRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: "https://demotiles.maplibre.org/style.json",
-      center: [INITIAL_VIEW_STATE.longitude, INITIAL_VIEW_STATE.latitude],
-      zoom: INITIAL_VIEW_STATE.zoom,
-      attributionControl: true,
+      style: BASE_STYLE,
+      center: [INITIAL_VIEW.longitude, INITIAL_VIEW.latitude], zoom: INITIAL_VIEW.zoom,
     });
+    mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     map.addControl(new ZoomLevelControl(), "top-right");
 
-    const overlay = new MapboxOverlay({ layers: [] });
-    map.addControl(overlay);
-
-    const emitViewport = (): void => {
-      onViewportChange(getViewport(map));
-    };
-
-    const scheduleViewportChange = (): void => {
-      if (viewportFrameRef.current !== null) {
-        return;
+    const syncSources = (): void => {
+      const current = propsRef.current;
+      if (setGeoJsonSource(map, EXPLICIT_SOURCE, current.explicitBoundaries as GeoJSON.FeatureCollection)) {
+        addExplicitLayers(map);
       }
+      if (setGeoJsonSource(map, POINT_SOURCE, makePointCollection(current.locations))) addPointLayers(map);
+      map.setFilter(POINT_LAYERS.selected, idFilter(current.selectedLocationId));
+      map.setFilter(POINT_LAYERS.highlighted, idsFilter(current.highlightedLocationIds));
+      if (current.bakedArchiveUrl) {
+        current.onBakedStatusChange("loading");
+        addBakedSource(map, current.bakedArchiveUrl, current.bakedZoomMin, current.bakedZoomMax);
+        map.setFilter(BAKED_LAYERS.selected, idFilter(current.selectedLocationId));
+        map.setFilter(BAKED_LAYERS.highlighted, idsFilter(current.highlightedLocationIds));
+      } else {
+        removeBakedSource(map);
+        current.onBakedStatusChange("error");
+      }
+    };
+    const interactiveLayers = (): string[] => [
+      EXPLICIT_LAYERS.fill, POINT_LAYERS.selected, POINT_LAYERS.base,
+      BAKED_LAYERS.selected, BAKED_LAYERS.fill,
+    ].filter((id) => Boolean(map.getLayer(id)));
+    const pickedLocationId = (event: maplibregl.MapMouseEvent): string | null => {
+      const layers = interactiveLayers();
+      if (layers.length === 0) return null;
+      const feature = map.queryRenderedFeatures(event.point, { layers })[0];
+      const locationId = String(feature?.properties?.location_id ?? "").trim();
+      return locationId || null;
+    };
+    const scheduleViewport = (): void => {
+      if (viewportFrameRef.current !== null) return;
       viewportFrameRef.current = window.requestAnimationFrame(() => {
         viewportFrameRef.current = null;
-        emitViewport();
+        propsRef.current.onViewportChange(getViewport(map));
+      });
+    };
+    const onMouseMove = (event: maplibregl.MapMouseEvent): void => {
+      const locationId = pickedLocationId(event);
+      if (locationId === hoveredIdRef.current) return;
+      hoveredIdRef.current = locationId;
+      map.getCanvas().style.cursor = locationId ? "pointer" : "";
+      propsRef.current.onHoverLocation(locationId);
+    };
+    const onMouseOut = (): void => {
+      hoveredIdRef.current = null;
+      map.getCanvas().style.cursor = "";
+      propsRef.current.onHoverLocation(null);
+    };
+    const onClick = (event: maplibregl.MapMouseEvent): void => {
+      const locationId = pickedLocationId(event);
+      if (locationId) propsRef.current.onClickLocation(locationId);
+      else propsRef.current.onEmptyMapClick();
+    };
+    const onSourceData = (event: maplibregl.MapSourceDataEvent): void => {
+      if (event.sourceId === BAKED_SOURCE && event.isSourceLoaded) propsRef.current.onBakedStatusChange("ready");
+    };
+    const onError = (event: { sourceId?: string }): void => {
+      if (event.sourceId === BAKED_SOURCE) propsRef.current.onBakedStatusChange("error");
+    };
+    const onStyleLoad = (): void => {
+      styleReadyRef.current = true;
+      syncSources();
+      propsRef.current.onViewportChange(getViewport(map));
+      propsRef.current.onProjectorChange((longitude, latitude) => {
+        if (!isFiniteCoordinate(latitude, longitude)) return { x: 0, y: 0 };
+        const point = map.project([longitude, latitude]);
+        const rect = map.getContainer().getBoundingClientRect();
+        return { x: rect.left + point.x, y: rect.top + point.y };
       });
     };
 
-    map.on("move", scheduleViewportChange);
-    map.on("click", () => {
-      const now = Date.now();
-      if (now - lastDeckClickTsRef.current < 90 || now - lastBakedClickTsRef.current < 90) {
-        return;
-      }
-      onEmptyMapClick();
-    });
-
-    map.on("load", () => {
-      emitViewport();
-      onProjectorChange((longitude, latitude) => {
-        if (!isFiniteCoordinate(latitude, longitude)) {
-          return { x: 0, y: 0 };
-        }
-        let point: maplibregl.Point;
-        try {
-          point = map.project([longitude, latitude]);
-        } catch {
-          return { x: 0, y: 0 };
-        }
-        const rect = map.getContainer().getBoundingClientRect();
-        return {
-          x: rect.left + point.x,
-          y: rect.top + point.y,
-        };
-      });
-    });
-
-    mapRef.current = map;
-    overlayRef.current = overlay;
+    map.on("style.load", onStyleLoad);
+    map.on("move", scheduleViewport);
+    map.on("mousemove", onMouseMove);
+    map.getCanvas().addEventListener("mouseout", onMouseOut);
+    map.on("click", onClick);
+    map.on("sourcedata", onSourceData);
+    map.on("error", onError);
 
     return () => {
-      if (viewportFrameRef.current !== null) {
-        window.cancelAnimationFrame(viewportFrameRef.current);
-        viewportFrameRef.current = null;
-      }
-      if (pulseTimerRef.current !== null) {
-        window.clearInterval(pulseTimerRef.current);
-        pulseTimerRef.current = null;
-      }
-      overlay.finalize();
+      if (viewportFrameRef.current !== null) window.cancelAnimationFrame(viewportFrameRef.current);
+      if (pulseTimerRef.current !== null) window.clearInterval(pulseTimerRef.current);
+      map.getCanvas().removeEventListener("mouseout", onMouseOut);
       map.remove();
       mapRef.current = null;
-      overlayRef.current = null;
-      onProjectorChange(null);
+      styleReadyRef.current = false;
+      propsRef.current.onProjectorChange(null);
     };
-  }, [onEmptyMapClick, onProjectorChange, onViewportChange]);
+  }, []);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) {
-      return;
-    }
-    if (!bakedTileUrlTemplate) {
-      onBakedStatusChange("error");
-      return;
-    }
+    if (map && styleReadyRef.current) setGeoJsonSource(map, POINT_SOURCE, pointCollection);
+  }, [pointCollection]);
 
-    bakedSourceLoadedRef.current = false;
-    onBakedStatusChange("loading");
-    upsertBakedSource(map, bakedTileUrlTemplate);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map && styleReadyRef.current) {
+      setGeoJsonSource(map, EXPLICIT_SOURCE, props.explicitBoundaries as GeoJSON.FeatureCollection);
+    }
+  }, [props.explicitBoundaries]);
 
-    const onSourceData = (event: maplibregl.MapSourceDataEvent): void => {
-      if (event.sourceId !== BAKED_SOURCE_ID || !event.isSourceLoaded || bakedSourceLoadedRef.current) {
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const generation = bakedGenerationRef.current + 1;
+    bakedGenerationRef.current = generation;
+    props.onBakedStatusChange(props.bakedArchiveUrl ? "loading" : "error");
+    const apply = (): void => {
+      if (generation !== bakedGenerationRef.current || !styleReadyRef.current) return;
+      if (!props.bakedArchiveUrl) {
+        removeBakedSource(map);
         return;
       }
-      bakedSourceLoadedRef.current = true;
-      onBakedStatusChange("ready");
+      addBakedSource(map, props.bakedArchiveUrl, props.bakedZoomMin, props.bakedZoomMax);
+      map.setFilter(BAKED_LAYERS.selected, idFilter(props.selectedLocationId));
+      map.setFilter(BAKED_LAYERS.highlighted, idsFilter(props.highlightedLocationIds));
     };
-    const onMouseMove = (event: maplibregl.MapMouseEvent & maplibregl.EventData): void => {
-      const feature = event.features?.[0] as { properties?: Record<string, unknown> } | undefined;
-      const locationId = String(feature?.properties?.location_id ?? "").trim();
-      onHoverLocation(locationId || null);
-    };
-    const onMouseLeave = (): void => {
-      onHoverLocation(null);
-    };
-    const onClick = (event: maplibregl.MapMouseEvent & maplibregl.EventData): void => {
-      const feature = event.features?.[0] as { properties?: Record<string, unknown> } | undefined;
-      const locationId = String(feature?.properties?.location_id ?? "").trim();
-      if (!locationId) {
-        return;
-      }
-      lastBakedClickTsRef.current = Date.now();
-      onClickLocation(locationId);
-    };
-
-    map.on("sourcedata", onSourceData);
-    map.on("mousemove", BAKED_LAYER_FILL_ID, onMouseMove);
-    map.on("mouseleave", BAKED_LAYER_FILL_ID, onMouseLeave);
-    map.on("click", BAKED_LAYER_FILL_ID, onClick);
+    if (styleReadyRef.current) apply();
+    else map.once("style.load", apply);
     return () => {
-      map.off("sourcedata", onSourceData);
-      if (map.getLayer(BAKED_LAYER_FILL_ID)) {
-        map.off("mousemove", BAKED_LAYER_FILL_ID, onMouseMove);
-        map.off("mouseleave", BAKED_LAYER_FILL_ID, onMouseLeave);
-        map.off("click", BAKED_LAYER_FILL_ID, onClick);
-      }
+      map.off("style.load", apply);
     };
-  }, [bakedTileUrlTemplate, onBakedStatusChange, onClickLocation, onHoverLocation, upsertBakedSource]);
+  }, [props.bakedArchiveUrl, props.bakedZoomMax, props.bakedZoomMin]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.getLayer(BAKED_LAYER_SELECTED_ID) || !map.getLayer(BAKED_LAYER_HIGHLIGHT_ID)) {
-      return;
-    }
-    map.setFilter(BAKED_LAYER_SELECTED_ID, _selectedFilter(selectedLocationId));
-    map.setFilter(BAKED_LAYER_HIGHLIGHT_ID, _inFilter(highlightedLocationIds));
-  }, [highlightedLocationIds, selectedLocationId]);
-
-  useEffect(() => {
-    if (highlightedLocationIds.length === 0) {
-      return;
-    }
-    setPulsePhase(0);
-    if (pulseTimerRef.current !== null) {
-      window.clearInterval(pulseTimerRef.current);
-    }
+    if (!map || !styleReadyRef.current) return;
+    if (map.getLayer(POINT_LAYERS.selected)) map.setFilter(POINT_LAYERS.selected, idFilter(props.selectedLocationId));
+    if (map.getLayer(POINT_LAYERS.highlighted)) map.setFilter(POINT_LAYERS.highlighted, idsFilter(props.highlightedLocationIds));
+    if (map.getLayer(BAKED_LAYERS.selected)) map.setFilter(BAKED_LAYERS.selected, idFilter(props.selectedLocationId));
+    if (map.getLayer(BAKED_LAYERS.highlighted)) map.setFilter(BAKED_LAYERS.highlighted, idsFilter(props.highlightedLocationIds));
+    if (pulseTimerRef.current !== null) window.clearInterval(pulseTimerRef.current);
+    if (props.highlightedLocationIds.length === 0 || !map.getLayer(POINT_LAYERS.highlighted)) return;
+    const started = performance.now();
     pulseTimerRef.current = window.setInterval(() => {
-      setPulsePhase((phase) => (phase + 1) % 60);
-    }, 50);
-    const stopHandle = window.setTimeout(() => {
-      if (pulseTimerRef.current !== null) {
+      if (!map.getLayer(POINT_LAYERS.highlighted)) return;
+      const elapsed = performance.now() - started;
+      map.setPaintProperty(POINT_LAYERS.highlighted, "circle-radius", 14 + Math.sin(elapsed / 130) * 4);
+      if (elapsed > 1400 && pulseTimerRef.current !== null) {
         window.clearInterval(pulseTimerRef.current);
         pulseTimerRef.current = null;
       }
-      setPulsePhase(0);
-    }, 1400);
-    return () => {
-      window.clearTimeout(stopHandle);
-    };
-  }, [highlightedLocationIds]);
+    }, 50);
+  }, [props.highlightedLocationIds, props.selectedLocationId]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || focusCoordinates.length === 0) {
-      return;
-    }
-    const validCoordinates = focusCoordinates.filter((item) => isFiniteCoordinate(item.latitude, item.longitude));
-    if (validCoordinates.length === 0) {
-      return;
-    }
-
-    const unique = Array.from(
-      new Map(
-        validCoordinates.map((item) => [
-          `${item.latitude.toFixed(6)}:${item.longitude.toFixed(6)}`,
-          item,
-        ]),
-      ).values(),
-    );
-    const key = unique
-      .map((item) => `${item.latitude.toFixed(4)}:${item.longitude.toFixed(4)}`)
-      .sort()
-      .join("|");
-    if (key === lastFocusKeyRef.current) {
-      return;
-    }
+    const valid = props.focusCoordinates.filter((item) => isFiniteCoordinate(item.latitude, item.longitude));
+    if (!map || valid.length === 0) return;
+    const unique = Array.from(new Map(valid.map((item) => [`${item.latitude.toFixed(6)}:${item.longitude.toFixed(6)}`, item])).values());
+    const key = unique.map((item) => `${item.latitude.toFixed(4)}:${item.longitude.toFixed(4)}`).sort().join("|");
+    if (key === lastFocusKeyRef.current) return;
     lastFocusKeyRef.current = key;
-
     if (unique.length === 1) {
-      map.easeTo({
-        center: [unique[0].longitude, unique[0].latitude],
-        zoom: Math.max(map.getZoom(), 4.5),
-        duration: 500,
-      });
+      map.easeTo({ center: [unique[0].longitude, unique[0].latitude], zoom: Math.max(map.getZoom(), 4.5), duration: 500 });
       return;
     }
-
-    const bounds = unique.reduce(
-      (acc, item) => {
-        acc.extend([item.longitude, item.latitude]);
-        return acc;
-      },
-      new maplibregl.LngLatBounds(
-        [unique[0].longitude, unique[0].latitude],
-        [unique[0].longitude, unique[0].latitude],
-      ),
+    const bounds = new maplibregl.LngLatBounds(
+      [unique[0].longitude, unique[0].latitude], [unique[0].longitude, unique[0].latitude],
     );
+    unique.slice(1).forEach((item) => bounds.extend([item.longitude, item.latitude]));
     map.fitBounds(bounds, { padding: 80, duration: 500, maxZoom: 6.5 });
-  }, [focusCoordinates]);
-
-  useEffect(() => {
-    const overlay = overlayRef.current;
-    if (!overlay) {
-      return;
-    }
-    const pulseFactor = 0.6 + Math.sin((pulsePhase / 60) * Math.PI * 2) * 0.4;
-    const layers = [
-      new GeoJsonLayer({
-        id: "explicit-live-boundaries",
-        data: explicitBoundaries.features,
-        pickable: true,
-        filled: false,
-        stroked: true,
-        lineWidthUnits: "pixels",
-        getLineWidth: 3,
-        getLineColor: [255, 255, 255, 245],
-        visible: explicitBoundaries.features.length > 0,
-        onHover: (info: PickingInfo<{ properties?: { location_id?: string } }>) => {
-          const locationId = String(info.object?.properties?.location_id ?? "").trim();
-          onHoverLocation(locationId || null);
-        },
-        onClick: (info: PickingInfo<{ properties?: { location_id?: string } }>) => {
-          const locationId = String(info.object?.properties?.location_id ?? "").trim();
-          if (!locationId) {
-            return;
-          }
-          lastDeckClickTsRef.current = Date.now();
-          onClickLocation(locationId);
-        },
-      }),
-      new ScatterplotLayer<PointRecord>({
-        id: "locations-points",
-        data: pointRecords,
-        pickable: true,
-        autoHighlight: true,
-        radiusUnits: "pixels",
-        radiusMinPixels: 3,
-        radiusMaxPixels: 18,
-        getPosition: (d) => [d.longitude, d.latitude],
-        getRadius: (d) => Math.min(4 + d.documentCount * 0.42, 16),
-        getLineColor: (d) =>
-          d.locationId === selectedLocationId ? [255, 255, 255, 250] : [20, 32, 53, 120],
-        lineWidthMinPixels: 1.5,
-        stroked: true,
-        getFillColor: (d) =>
-          d.locationId === selectedLocationId
-            ? [216, 70, 45, 245]
-            : d.rank === "city"
-              ? [28, 92, 205, 215]
-              : [96, 157, 214, 205],
-        updateTriggers: {
-          getFillColor: [selectedLocationId],
-          getLineColor: [selectedLocationId],
-        },
-        onHover: (info: PickingInfo<PointRecord>) => {
-          onHoverLocation(info.object?.locationId ?? null);
-        },
-        onClick: (info: PickingInfo<PointRecord>) => {
-          if (!info.object) {
-            return;
-          }
-          lastDeckClickTsRef.current = Date.now();
-          onClickLocation(info.object.locationId);
-        },
-      }),
-      new ScatterplotLayer<{ longitude: number; latitude: number; locationId: string }>({
-        id: "highlight-points",
-        data: highlightedPoints,
-        pickable: false,
-        radiusUnits: "pixels",
-        stroked: true,
-        filled: false,
-        lineWidthUnits: "pixels",
-        lineWidthMinPixels: 2,
-        getPosition: (d) => [d.longitude, d.latitude],
-        getRadius: 10 + pulseFactor * 8,
-        getLineColor: [250, 210, 65, 220],
-        visible: highlightedPoints.length > 0,
-        updateTriggers: {
-          getRadius: [pulseFactor],
-        },
-      }),
-    ];
-    overlay.setProps({ layers });
-  }, [
-    explicitBoundaries.features,
-    highlightedPoints,
-    onClickLocation,
-    onHoverLocation,
-    pointRecords,
-    pulsePhase,
-    selectedLocationId,
-  ]);
+  }, [props.focusCoordinates]);
 
   return <div className="map-canvas" ref={containerRef} />;
 }

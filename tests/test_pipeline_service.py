@@ -1,54 +1,58 @@
-from services.pipeline import service
+from __future__ import annotations
+
+import pytest
+
+from services.pipeline.service import PipelineCommandService
 
 
-def test_run_incremental_pipeline_orchestrates(monkeypatch) -> None:
-    monkeypatch.setattr(
-        service,
-        "process_documents",
-        lambda urls: type(
-            "R",
-            (),
-            {"processed": len(urls), "succeeded": len(urls), "failed": 0},
-        )(),
-    )
-    monkeypatch.setattr(service, "process_pending_snapshots", lambda limit=1000: ["s1", "s2"])
-    monkeypatch.setattr(service, "normalize_pending_mentions", lambda limit=5000: 3)
-    monkeypatch.setattr(
-        service,
-        "process_pending_mentions",
-        lambda limit=5000: type(
-            "G",
-            (),
-            {"processed": 6, "linked": 4, "unresolved": 2},
-        )(),
-    )
-    monkeypatch.setattr(service, "rebuild_analytics", lambda: {"bi_documents": 1})
-    monkeypatch.setattr(service, "export_all_bi_tables", lambda mode="incremental": None)
+class FakeRepository:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
 
-    result = service.run_incremental_pipeline(target_urls=["u1", "u2"])
-    assert result.crawled_urls == 2
-    assert result.extracted_snapshots == 2
-    assert result.normalized_mentions == 3
-    assert result.geocoded_mentions == 4
+    def enqueue_command(self, command_type: str, **kwargs) -> int:
+        self.calls.append((command_type, kwargs))
+        return 17
 
 
-def test_run_full_pipeline_uses_canonical_range(monkeypatch) -> None:
-    monkeypatch.setattr(service, "generate_scp_urls", lambda start, end: ["u1", "u2"])
-    monkeypatch.setattr(
-        service,
-        "run_incremental_pipeline",
-        lambda target_urls=None: type(
-            "P",
-            (),
-            {
-                "run_id": "r1",
-                "crawled_urls": len(target_urls or []),
-                "extracted_snapshots": 0,
-                "normalized_mentions": 0,
-                "geocoded_mentions": 0,
-            },
-        )(),
+def test_enqueue_run_builds_canonical_start_command() -> None:
+    repo = FakeRepository()
+    service = PipelineCommandService(repo)
+
+    queued = service.enqueue_run(
+        pipeline_type="full_pipeline",
+        target_scope="single_document",
+        document_url="https://example.test/scp-001",
+        options={"process_unprocessed_only": False},
+        requested_by="test",
     )
 
-    result = service.run_full_pipeline()
-    assert result.crawled_urls == 2
+    assert queued.command_id == 17
+    command_type, kwargs = repo.calls[0]
+    assert command_type == "start_run"
+    assert kwargs["payload_json"]["options"] == {"process_unprocessed_only": False}
+    assert kwargs["requested_by"] == "test"
+    assert kwargs["dedupe_key"].startswith("start_run:")
+
+
+def test_enqueue_incremental_run_uses_control_plane_semantics() -> None:
+    repo = FakeRepository()
+
+    PipelineCommandService(repo).enqueue_incremental_run()
+
+    _, kwargs = repo.calls[0]
+    assert kwargs["payload_json"] == {
+        "pipeline_type": "full_pipeline",
+        "target_scope": "incremental",
+        "document_url": None,
+        "document_range": None,
+        "options": {"process_unprocessed_only": True},
+    }
+    assert kwargs["requested_by"] == "scheduler"
+
+
+def test_enqueue_run_rejects_unknown_pipeline_type() -> None:
+    with pytest.raises(ValueError, match="invalid pipeline_type"):
+        PipelineCommandService(FakeRepository()).enqueue_run(
+            pipeline_type="unknown",
+            target_scope="all",
+        )

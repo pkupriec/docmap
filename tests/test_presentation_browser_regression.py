@@ -19,6 +19,7 @@ from playwright.sync_api import sync_playwright
 
 from services.presentation.backend import api
 from services.presentation.backend.api import create_presentation_app
+from services.presentation.backend.geometry_artifacts import GeometryArtifactStore
 from services.presentation.backend.repository import ResolvedLocation
 
 
@@ -26,12 +27,6 @@ class BrowserPresentationRepo:
     def get_admin_boundaries_geojson(
         self,
         *,
-        minimal: bool = False,
-        rank_filter: str = "default",
-        ranks: tuple[str, ...] | list[str] | None = None,
-        chunk_ids: tuple[str, ...] | list[str] | None = None,
-        viewport_bucket: str | None = None,
-        bbox: tuple[float, float, float, float] | None = None,
         selected_location_id: str | None = None,
         highlighted_location_ids: tuple[str, ...] | list[str] | None = None,
     ) -> dict[str, Any]:
@@ -122,8 +117,7 @@ def _seed_baked_geometry(root: Path) -> tuple[str, str]:
     version = "2026-04-17-phase-c"
     mode = "balanced_precise"
     all_modes = ("full_precise", "balanced_precise", "simplified", "primitive")
-    for item in all_modes:
-        (root / version / item).mkdir(parents=True, exist_ok=True)
+    (root / version).mkdir(parents=True, exist_ok=True)
     (root / "current.json").write_text(
         json.dumps(
             {
@@ -136,26 +130,22 @@ def _seed_baked_geometry(root: Path) -> tuple[str, str]:
     (root / version / "manifest.json").write_text(
         json.dumps(
             {
-                "schema_version": 1,
-                "tile_format": "mvt",
-                "zoom_min": 0,
-                "zoom_max": 8,
+                "schema_version": "v2",
+                "tile_format": "pmtiles",
+                "min_zoom": 0,
+                "max_zoom": 8,
                 "modes": {
                     "full_precise": {
-                        "path": f"{version}/full_precise",
-                        "tolerance_by_zoom_band": {"world": 0, "regional": 0, "local": 0},
+                        "path": f"{version}/full_precise.pmtiles",
                     },
                     "balanced_precise": {
-                        "path": f"{version}/balanced_precise",
-                        "tolerance_by_zoom_band": {"world": 8, "regional": 4, "local": 2},
+                        "path": f"{version}/balanced_precise.pmtiles",
                     },
                     "simplified": {
-                        "path": f"{version}/simplified",
-                        "tolerance_by_zoom_band": {"world": 12, "regional": 8, "local": 6},
+                        "path": f"{version}/simplified.pmtiles",
                     },
                     "primitive": {
-                        "path": f"{version}/primitive",
-                        "tolerance_by_zoom_band": {"world": 20, "regional": 12, "local": 9},
+                        "path": f"{version}/primitive.pmtiles",
                     },
                 },
             }
@@ -163,13 +153,9 @@ def _seed_baked_geometry(root: Path) -> tuple[str, str]:
         encoding="utf-8",
     )
     for baked_mode in all_modes:
-        for z in range(0, 3):
-            max_idx = 2**z
-            for x in range(0, max_idx):
-                for y in range(0, max_idx):
-                    tile_dir = root / version / baked_mode / str(z) / str(x)
-                    tile_dir.mkdir(parents=True, exist_ok=True)
-                    (tile_dir / f"{y}.mvt").write_bytes(b"\x1f\x8b")
+        # The browser regression verifies range transport and lifecycle wiring;
+        # archive encoding itself is covered by analytics tests.
+        (root / version / f"{baked_mode}.pmtiles").write_bytes(b"\x00" * 16_384)
     return version, mode
 
 
@@ -185,19 +171,18 @@ def _run_browser_app():
     if not dist_dir.exists():
         pytest.skip("presentation dist is missing; run the frontend build first")
 
-    original_repo = api.PresentationRepository
-    original_migrations = api.run_startup_migrations
     original_static_dir = os.environ.get("PRESENTATION_STATIC_DIR")
-    original_baked_root = os.environ.get("DOCMAP_PRESENTATION_BAKED_GEOMETRY_ROOT")
+    original_baked_root = os.environ.get("DOCMAP_PRESENTATION_ARTIFACT_ROOT")
     baked_root = Path(tempfile.mkdtemp(prefix="docmap-baked-browser-"))
     _seed_baked_geometry(baked_root)
-    api.PresentationRepository = BrowserPresentationRepo
-    api.run_startup_migrations = lambda: None
     api.BOUNDARIES_CACHE.clear()
     os.environ["PRESENTATION_STATIC_DIR"] = str(dist_dir)
-    os.environ["DOCMAP_PRESENTATION_BAKED_GEOMETRY_ROOT"] = str(baked_root)
+    os.environ["DOCMAP_PRESENTATION_ARTIFACT_ROOT"] = str(baked_root)
 
-    app = create_presentation_app()
+    app = create_presentation_app(
+        repository_factory=BrowserPresentationRepo,
+        artifact_store=GeometryArtifactStore(baked_root),
+    )
     port = _find_free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(config)
@@ -217,16 +202,14 @@ def _run_browser_app():
     finally:
         server.should_exit = True
         thread.join(timeout=5)
-        api.PresentationRepository = original_repo
-        api.run_startup_migrations = original_migrations
         if original_static_dir is None:
             os.environ.pop("PRESENTATION_STATIC_DIR", None)
         else:
             os.environ["PRESENTATION_STATIC_DIR"] = original_static_dir
         if original_baked_root is None:
-            os.environ.pop("DOCMAP_PRESENTATION_BAKED_GEOMETRY_ROOT", None)
+            os.environ.pop("DOCMAP_PRESENTATION_ARTIFACT_ROOT", None)
         else:
-            os.environ["DOCMAP_PRESENTATION_BAKED_GEOMETRY_ROOT"] = original_baked_root
+            os.environ["DOCMAP_PRESENTATION_ARTIFACT_ROOT"] = original_baked_root
 
 
 def _api_requests(page) -> list[dict[str, Any]]:
@@ -236,7 +219,11 @@ def _api_requests(page) -> list[dict[str, Any]]:
         path = urlparse(request.url).path
         if not path.startswith("/api/map/"):
             return
-        requests.append({"path": path, "query": parse_qs(urlparse(request.url).query)})
+        requests.append({
+            "path": path,
+            "query": parse_qs(urlparse(request.url).query),
+            "range": request.headers.get("range"),
+        })
 
     page.on("request", handle_request)
     return requests
@@ -253,19 +240,30 @@ def test_browser_baked_normal_view_and_explicit_live_overlays() -> None:
 
             page = browser.new_page()
             requests = _api_requests(page)
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
             page.goto(base_url, wait_until="domcontentloaded")
             page.wait_for_function("() => Boolean(window.__DOCMAP_TEST_HOOKS__?.setViewport)")
             page.wait_for_function(
                 """
                 () => {
                   const debug = window.__DOCMAP_TEST_HOOKS__.getBoundaryDebug();
-                  return Boolean(debug.bakedTileUrlTemplate);
+                  return Boolean(debug.bakedArchiveUrl);
                 }
                 """,
             )
             page.wait_for_timeout(400)
             assert any(request["path"] == "/api/map/baked/manifest" for request in requests)
-            assert any(request["path"] == "/api/map/baked/tile-index" for request in requests)
+            page.wait_for_timeout(1_000)
+            startup_debug = page.evaluate("() => window.__DOCMAP_TEST_HOOKS__.getBoundaryDebug()")
+            assert any(request["path"].endswith("/balanced_precise.pmtiles") for request in requests), (
+                page_errors,
+                startup_debug,
+            )
+            assert any(
+                request["path"].endswith("/balanced_precise.pmtiles") and request["range"]
+                for request in requests
+            )
             assert not any(request["path"] == "/api/map/boundaries" for request in requests)
             page.wait_for_function(
                 """
@@ -278,7 +276,7 @@ def test_browser_baked_normal_view_and_explicit_live_overlays() -> None:
             debug = page.evaluate("() => window.__DOCMAP_TEST_HOOKS__.getBoundaryDebug()")
             assert debug["sessionPrecisionMode"] == "balanced_precise"
             assert debug["defaultPrecisionMode"] == "balanced_precise"
-            assert debug["backgroundPreloadTotalCount"] > 0
+            assert debug["bakedArchiveUrl"].endswith("/balanced_precise.pmtiles")
 
             requests.clear()
             page.evaluate("() => window.__DOCMAP_TEST_HOOKS__.setPrecisionMode('simplified')")
@@ -295,10 +293,7 @@ def test_browser_baked_normal_view_and_explicit_live_overlays() -> None:
                 for request in requests
             )
             page.wait_for_timeout(300)
-            assert any(
-                request["path"] == "/api/map/baked/tile-index" and request["query"].get("mode") == ["simplified"]
-                for request in requests
-            )
+            assert any(request["path"].endswith("/simplified.pmtiles") for request in requests)
             assert not any(request["path"] == "/api/map/boundaries" for request in requests)
 
             requests.clear()

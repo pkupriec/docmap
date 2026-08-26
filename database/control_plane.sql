@@ -204,6 +204,9 @@ CREATE TABLE IF NOT EXISTS pipeline_commands (
     processed_at TIMESTAMPTZ NULL,
     error_message TEXT NULL,
     dedupe_key TEXT NULL,
+    claim_token UUID NULL,
+    claimed_at TIMESTAMPTZ NULL,
+    lease_expires_at TIMESTAMPTZ NULL,
     CONSTRAINT pipeline_commands_stage_retry_requires_stage_chk CHECK (
         command_type <> 'retry_stage' OR stage_name IS NOT NULL
     )
@@ -211,6 +214,9 @@ CREATE TABLE IF NOT EXISTS pipeline_commands (
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_commands_status_id
     ON pipeline_commands(status, id ASC);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_commands_claimable
+    ON pipeline_commands(status, lease_expires_at, id ASC);
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_commands_run_status_id
     ON pipeline_commands(pipeline_run_id, status, id ASC);

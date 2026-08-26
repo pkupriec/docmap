@@ -1,23 +1,16 @@
-﻿# Current Phase Snapshot
+# Current phase
 
-As of 2026-03-28:
+As of 2026-08-26, the project is in refactor verification.
 
-Implemented baseline:
-- phases 0-14 delivered core pipeline, control plane, and separate presentation runtime
-- canonical geo dictionary and deterministic ambiguity resolver are implemented
-- stage retry and resume controls are implemented
+Delivered in this phase:
 
-In-progress themes:
-- phase 19 full geometry coverage implementation is in active cutover verification
-- phases 16-18 canonical geo identity refinements are carried into phase 19 behavior
-- documentation is now unified under `docs/` for all agents (no role-split split)
+- versioned on-demand PMTiles replaced the custom full-dataset tile preload;
+- MapLibre is the only map renderer;
+- presentation is pooled, read-only, and range-efficient;
+- PDF thumbnails are generated once and served as WebP;
+- pipeline execution has one queue-driven orchestrator with expiring claims;
+- BigQuery and obsolete tiling libraries were removed;
+- city identity is fixed at the geocoder layer;
+- historical documentation was removed from the working tree and retained in Git history.
 
-Latest phase-19 aligned behavior in code:
-- geocoder stores deterministic candidate metadata (`point`/`boundary`) for downstream geometry selection
-- analytics attempts geometry linkage for all geocoded locations (not only a fixed tag subset)
-- hierarchy/aggregation includes recursive descendant semantics with generalized polygon spatial links across countries/admin levels
-- geocode stage defaults to canonical refresh + missing-identity refresh, with optional full from-scratch geo refresh
-
-Still partial:
-- scheduler exists but is not started by default app runtime
-- production auth, backups, and deployment hardening remain out of scope for local stack
+Exit criteria are the checks and performance budgets in [../operations/VERIFICATION.md](../operations/VERIFICATION.md). Snapshot-history optimization and external warehouse export are explicitly out of scope.

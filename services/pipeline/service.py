@@ -1,187 +1,65 @@
 from __future__ import annotations
 
-import logging
-import time
-import uuid
+import json
 from dataclasses import dataclass
+from typing import Any
 
-from services.analytics import rebuild_analytics
-from services.analytics.bigquery_exporter import export_all_bi_tables
-from services.crawler import generate_scp_urls, process_documents
-from services.extractor import process_pending_snapshots
-from services.geocoder import (
-    normalize_pending_mentions,
-    process_pending_mentions,
-    refresh_canonical_dictionary_from_env,
-)
-
-
-logger = logging.getLogger(__name__)
-SCP_START = 1
-PENDING_LIMIT = 2147483647
+from services.control.constants import PIPELINE_TYPES, TARGET_SCOPES
+from services.control.repository import ControlRepository
 
 
 @dataclass(frozen=True)
-class StageSummary:
-    run_id: str
-    stage: str
-    processed: int
-    succeeded: int
-    failed: int
-    skipped: int
-    duration_seconds: float
+class QueuedPipelineRun:
+    command_id: int
+    status: str = "pending"
 
 
-@dataclass(frozen=True)
-class PipelineResult:
-    run_id: str
-    crawled_urls: int
-    extracted_snapshots: int
-    normalized_mentions: int
-    geocoded_mentions: int
+class PipelineCommandService:
+    """The single write entrypoint for starting pipeline work.
 
+    This service only enqueues commands. Stage execution belongs exclusively to
+    ``ControlOrchestrator`` so API and scheduled runs share the same lifecycle,
+    progress, retry, and cancellation behavior.
+    """
 
-def run_incremental_pipeline(target_urls: list[str] | None = None) -> PipelineResult:
-    run_id = str(uuid.uuid4())
-    started_at = time.monotonic()
-    crawl_end = 7999
-    urls = target_urls if target_urls is not None else generate_scp_urls(SCP_START, crawl_end)
-    logger.info("pipeline.run_start run_id=%s mode=incremental urls=%s", run_id, len(urls))
+    def __init__(self, repository: ControlRepository | None = None) -> None:
+        self.repository = repository or ControlRepository()
 
-    stage_started = time.monotonic()
-    crawl_result = process_documents(urls)
-    _log_stage_summary(
-        StageSummary(
-            run_id=run_id,
-            stage="crawl",
-            processed=crawl_result.processed,
-            succeeded=crawl_result.succeeded,
-            failed=crawl_result.failed,
-            skipped=0,
-            duration_seconds=round(time.monotonic() - stage_started, 2),
+    def enqueue_run(
+        self,
+        *,
+        pipeline_type: str,
+        target_scope: str,
+        document_url: str | None = None,
+        document_range: dict[str, int] | None = None,
+        options: dict[str, Any] | None = None,
+        requested_by: str | None = None,
+    ) -> QueuedPipelineRun:
+        if pipeline_type not in PIPELINE_TYPES:
+            raise ValueError(f"invalid pipeline_type: {pipeline_type}")
+        if target_scope not in TARGET_SCOPES:
+            raise ValueError(f"invalid target_scope: {target_scope}")
+
+        payload = {
+            "pipeline_type": pipeline_type,
+            "target_scope": target_scope,
+            "document_url": document_url,
+            "document_range": document_range,
+            "options": dict(options or {}),
+        }
+        dedupe_key = f"start_run:{json.dumps(payload, sort_keys=True)}"
+        command_id = self.repository.enqueue_command(
+            "start_run",
+            payload_json=payload,
+            requested_by=requested_by,
+            dedupe_key=dedupe_key,
         )
-    )
+        return QueuedPipelineRun(command_id=command_id)
 
-    stage_started = time.monotonic()
-    extraction_results = process_pending_snapshots(limit=PENDING_LIMIT)
-    _log_stage_summary(
-        StageSummary(
-            run_id=run_id,
-            stage="extract",
-            processed=len(extraction_results),
-            succeeded=len(extraction_results),
-            failed=0,
-            skipped=0,
-            duration_seconds=round(time.monotonic() - stage_started, 2),
+    def enqueue_incremental_run(self, *, requested_by: str = "scheduler") -> QueuedPipelineRun:
+        return self.enqueue_run(
+            pipeline_type="full_pipeline",
+            target_scope="incremental",
+            options={"process_unprocessed_only": True},
+            requested_by=requested_by,
         )
-    )
-
-    stage_started = time.monotonic()
-    refresh_report = refresh_canonical_dictionary_from_env()
-    logger.info(
-        "pipeline.geocode_identity_refresh executed=%s source=%s counts=%s",
-        refresh_report.get("executed"),
-        refresh_report.get("source"),
-        refresh_report.get("counts"),
-    )
-
-    stage_started = time.monotonic()
-    normalized_count = normalize_pending_mentions(limit=PENDING_LIMIT)
-    _log_stage_summary(
-        StageSummary(
-            run_id=run_id,
-            stage="normalize",
-            processed=normalized_count,
-            succeeded=normalized_count,
-            failed=0,
-            skipped=0,
-            duration_seconds=round(time.monotonic() - stage_started, 2),
-        )
-    )
-
-    stage_started = time.monotonic()
-    geocode_result = process_pending_mentions(limit=PENDING_LIMIT)
-    _log_stage_summary(
-        StageSummary(
-            run_id=run_id,
-            stage="geocode",
-            processed=geocode_result.processed,
-            succeeded=geocode_result.linked,
-            failed=0,
-            skipped=geocode_result.unresolved,
-            duration_seconds=round(time.monotonic() - stage_started, 2),
-        )
-    )
-
-    stage_started = time.monotonic()
-    rebuild_stats = rebuild_analytics()
-    _log_stage_summary(
-        StageSummary(
-            run_id=run_id,
-            stage="analytics",
-            processed=sum(rebuild_stats.values()),
-            succeeded=sum(rebuild_stats.values()),
-            failed=0,
-            skipped=0,
-            duration_seconds=round(time.monotonic() - stage_started, 2),
-        )
-    )
-
-    stage_started = time.monotonic()
-    export_all_bi_tables(mode="incremental")
-    _log_stage_summary(
-        StageSummary(
-            run_id=run_id,
-            stage="export",
-            processed=3,
-            succeeded=3,
-            failed=0,
-            skipped=0,
-            duration_seconds=round(time.monotonic() - stage_started, 2),
-        )
-    )
-
-    result = PipelineResult(
-        run_id=run_id,
-        crawled_urls=crawl_result.succeeded,
-        extracted_snapshots=len(extraction_results),
-        normalized_mentions=normalized_count,
-        geocoded_mentions=geocode_result.linked,
-    )
-    duration = round(time.monotonic() - started_at, 2)
-    _log_stage_summary(
-        StageSummary(
-            run_id=run_id,
-            stage="pipeline",
-            processed=result.crawled_urls,
-            succeeded=result.crawled_urls,
-            failed=0,
-            skipped=0,
-            duration_seconds=duration,
-        )
-    )
-    logger.info("pipeline.run_done run_id=%s result=%s", run_id, result)
-    return result
-
-
-def run_single_document_pipeline(url: str) -> PipelineResult:
-    return run_incremental_pipeline(target_urls=[url])
-
-
-def run_full_pipeline() -> PipelineResult:
-    crawl_end = 7999
-    logger.info("pipeline.full_mode_start range_start=%s range_end=%s", SCP_START, crawl_end)
-    return run_incremental_pipeline(target_urls=generate_scp_urls(SCP_START, crawl_end))
-
-
-def _log_stage_summary(summary: StageSummary) -> None:
-    logger.info(
-        "pipeline.stage_summary run_id=%s stage=%s processed=%s succeeded=%s failed=%s skipped=%s duration_seconds=%s",
-        summary.run_id,
-        summary.stage,
-        summary.processed,
-        summary.succeeded,
-        summary.failed,
-        summary.skipped,
-        summary.duration_seconds,
-    )

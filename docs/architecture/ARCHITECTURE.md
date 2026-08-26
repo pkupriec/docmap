@@ -1,59 +1,35 @@
-﻿# Architecture
+# Architecture
 
-## System Flows
+DocMap is a PostgreSQL-backed pipeline with two HTTP applications.
 
-Data flow:
-`SCP Wiki -> crawl -> snapshots -> extract -> geocode -> analytics -> export`
+```text
+control UI -> control API -> command queue -> orchestrator
+                                            |
+                                            v
+                         crawl -> extract -> geocode -> analytics -> export
+                                                        |          |
+                                                        v          v
+                                                     Postgres   PMTiles
+                                                        ^          |
+                                                        |          v
+                                             presentation API -> MapLibre UI
+```
 
-Control flow:
-`UI/API -> pipeline_commands -> orchestrator -> runs/stages/progress/logs`
+The Compose stack keeps these services:
 
-Presentation flow:
-`BI tables -> presentation API -> presentation UI`
+- `postgres`: PostGIS source of truth.
+- `app`: control API plus command worker/orchestrator.
+- `control-ui`: operator UI.
+- `presentation`: read-only API plus built frontend.
+- `canonical-refresh`: optional offline dictionary tool.
+- `pgadmin`: local database administration.
 
-## Runtime Components
+The app and presentation containers share one named artifact volume. Analytics publishes immutable version directories and atomically swaps `current.json`; presentation mounts the volume read-only.
 
-Control runtime:
-- app factory: `services/control/api.py:create_app`
-- orchestrator: `services/control/orchestrator.py`
+Presentation startup opens a bounded `psycopg_pool`, configures read-only transactions, and performs no migration. The control application owns startup schema patches.
 
-Presentation runtime:
-- app factory: `services/presentation/backend/api.py:create_presentation_app`
-- API and static frontend served from `presentation` container
+Interactive geometry is split by purpose:
 
-Shared infrastructure:
-- DB and schema startup: `services/common/*`, `database/*.sql`
-- local deployment: `infra/docker-compose.yml`
-
-## Concurrency and Execution Model
-
-- Single active run policy enforced by orchestrator and control repository logic.
-- Commands are queued in `pipeline_commands` and applied asynchronously.
-- Cancellation is cooperative at item/stage boundaries.
-- Resume is stage-level and uses saved progress indexes.
-
-## Failure Model
-
-- Item-level failures are logged and can be isolated per stage implementation.
-- Fatal stage exception marks stage and run as failed.
-- SSE stream exposes live `run_status`, `stage_status`, `progress`, `log`, `heartbeat` events.
-
-## Canonical Geo Identity Model
-
-- Geocoder can refresh canonical dictionary before geocoding stage.
-- `geo_locations` stores canonical linkage fields:
-  - `canonical_id`
-  - `canonical_resolution_method`
-  - `canonical_confidence`
-  - `canonical_resolution_details`
-- Ambiguous safe-alias matches are resolved by deterministic scoring logic.
-
-## Deployment Model
-
-Local compose services:
-- `postgres`
-- `app`
-- `control-ui`
-- `presentation`
-- `canonical-refresh` (profile `offline-tools`)
-- `pgadmin`
+- the base map reads one selected PMTiles precision archive through HTTP byte ranges;
+- exact geometry for click, selection, and highlight is fetched on demand by explicit location ID;
+- points, search results, and document relationships come from compact JSON APIs.

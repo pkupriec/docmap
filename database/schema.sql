@@ -36,6 +36,7 @@ CREATE TABLE document_snapshots (
     raw_html TEXT,
     clean_text TEXT,
     pdf_blob BYTEA,
+    pdf_thumbnail_webp BYTEA,
     created_at TIMESTAMP DEFAULT now()
 );
 
@@ -113,6 +114,7 @@ CREATE TABLE geo_locations (
     canonical_resolution_method TEXT,
     canonical_confidence SMALLINT,
     canonical_resolution_details JSONB,
+    identity_key TEXT,
     geom GEOGRAPHY(Point, 4326)
 );
 
@@ -124,6 +126,19 @@ ON geo_locations(osm_type, osm_id);
 
 CREATE INDEX idx_geo_locations_canonical_id
 ON geo_locations(canonical_id);
+
+CREATE UNIQUE INDEX uq_geo_locations_identity_key
+ON geo_locations(identity_key)
+WHERE identity_key IS NOT NULL;
+
+CREATE TABLE geo_location_aliases (
+    normalized_location TEXT PRIMARY KEY,
+    location_id UUID NOT NULL REFERENCES geo_locations(id) ON DELETE CASCADE,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_geo_location_aliases_location_id
+ON geo_location_aliases(location_id);
 
 -- =====================================================
 -- CANONICAL GEO DICTIONARY

@@ -561,7 +561,7 @@ def _select_feature_for_target(
     by_osm: dict[tuple[str, int], dict[str, Any]],
     by_rank_alias: dict[tuple[str, str], list[dict[str, Any]]],
     by_region_pair: dict[tuple[str, str, str], list[dict[str, Any]]],
-    allow_live_lookup: bool,
+    allow_live_lookup: bool = False,
 ) -> tuple[dict[str, Any] | None, str]:
     exact = by_location_id.get(target.location_id)
     if exact is not None:
